@@ -635,6 +635,11 @@ def call_llm_for_apply_with_think_tool_available(file_path, original_content, fi
             appended_content = ""
         toolbox.use(event)
 
+    if full_response.lstrip().startswith("<think>") and notool_response.startswith("\n"):
+        # The newline separating </think> from the file content is a wrapping
+        # artifact, not part of the file.
+        notool_response = notool_response[1:]
+
     return notool_response
 
 def call_llm_for_apply(file_path, original_content, file_diff, model, api_key=None, base_url=None, extra_prompt=None, max_tokens=30000):
