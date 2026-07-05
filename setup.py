@@ -7,7 +7,7 @@ setup(
     author='255labs',
     url='https://github.com/255BITS/patchling-py',
     project_urls={
-        'Documentation': 'https://patchling.255labs.xyz',
+        'Documentation': 'https://255bits.github.io/patchling-py',
         'Source': 'https://github.com/255BITS/patchling-py',
         'Browser/Node runtime (npm)': 'https://www.npmjs.com/package/patchling',
         'Built with patchling (nanoodle)': 'https://nanoodle.com',

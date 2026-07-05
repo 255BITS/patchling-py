@@ -58,4 +58,4 @@ patchling-apply's AI-powered smart apply resolves these automatically, keeping y
 
 For production-ready loop patterns and real metrics (18→127 tests, 8 SQL injections→0), see the [Agent Loops Guide](examples/automation.md).
 
-For further details about Patchling and its companion tools, please refer to the [Patchling Documentation](https://patchling.255labs.xyz).
+For further details about Patchling and its companion tools, please refer to the [Patchling Documentation](https://255bits.github.io/patchling-py).

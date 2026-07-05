@@ -17,7 +17,7 @@ print(updated["main.py"])
 
 Files in, files out. No filesystem access required, no agent harness. The hard part — applying an LLM-generated diff that `git apply` would reject — is what `smartapply` solves: per-file, AI-assisted patch resolution that survives fuzzy hunks, renames, new files, and deletions.
 
-📚 Full documentation at [patchling.255labs.xyz](https://patchling.255labs.xyz)
+📚 Full documentation at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py)
 
 Prefer the browser? **[patchling](https://github.com/255BITS/patchling)** is a JavaScript port of
 `generateDiff` + `smartapply` — try the **[live demos →](https://255bits.github.io/patchling-examples/)**.
@@ -94,7 +94,7 @@ See [examples/usage_example.py](examples/usage_example.py) for a runnable versio
 - `build_environment(files: dict[str, str]) -> str` — serializes a files dict into the environment string `generate_diff` expects.
 - `load_project_files(path, cwd) -> dict` / `save_files(files, base_dir)` — optional filesystem helpers for when you *do* want to read/write a real project (respects `.gitignore` and `.gptignore`).
 
-Full signatures, error handling, and edge cases: [API Reference](https://patchling.255labs.xyz/api).
+Full signatures, error handling, and edge cases: [API Reference](https://255bits.github.io/patchling-py/api).
 
 **Pipeline example** — sequential transformations over an in-memory codebase:
 
@@ -166,7 +166,7 @@ patchling "Add type hints to all functions" --apply
 patchling "Add logging" src/api/ src/utils/helpers.py
 ```
 
-Useful flags: `--model`, `--temperature`, `--prepend <file>` (custom instructions), `--image <path>` (visual context), `--nobeep`. Full list: [CLI Reference](https://patchling.255labs.xyz/cli).
+Useful flags: `--model`, `--temperature`, `--prepend <file>` (custom instructions), `--image <path>` (visual context), `--nobeep`. Full list: [CLI Reference](https://255bits.github.io/patchling-py/cli).
 
 Because changes arrive as diffs, the CLI is git-native: review with `git diff`, keep with `git add -p`, discard with `git checkout .`.
 
@@ -179,7 +179,7 @@ patchling-apply path/to/diff.patch
 patchling-apply --diff "<diff text>"
 ```
 
-Options: `--project-dir`, `--model`, `--max_tokens`, `--nobeep`. Details: [patchling-apply docs](https://patchling.255labs.xyz/patchling-apply).
+Options: `--project-dir`, `--model`, `--max_tokens`, `--nobeep`. Details: [patchling-apply docs](https://255bits.github.io/patchling-py/patchling-apply).
 
 ### Agent loops
 
@@ -193,7 +193,7 @@ while true; do
 done
 ```
 
-One overnight test-coverage loop took a project from 18 to 127 test cases. Recipes and guardrails: [Automation Guide](https://patchling.255labs.xyz/examples/automation).
+One overnight test-coverage loop took a project from 18 to 127 test cases. Recipes and guardrails: [Automation Guide](https://255bits.github.io/patchling-py/examples/automation).
 
 ---
 
@@ -206,7 +206,7 @@ pytest tests/
 
 ## Documentation
 
-Docs live at [patchling.255labs.xyz](https://patchling.255labs.xyz). To preview locally:
+Docs live at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py). To preview locally:
 
 ```bash
 pip install .[docs]
