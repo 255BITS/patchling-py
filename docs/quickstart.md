@@ -1,13 +1,13 @@
 # Quickstart Guide
 
-> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+> **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
-Get GPTDiff running in under 2 minutes.
+Get Patchling running in under 2 minutes.
 
 ## Step 1: Install
 
 ```bash
-pip install gptdiff
+pip install patchling
 ```
 
 ## Step 2: Configure
@@ -28,11 +28,11 @@ Navigate to any project and describe the change you want:
 
 ```bash
 cd your-project
-gptdiff "Add type hints to all functions" --apply
+patchling "Add type hints to all functions" --apply
 ```
 
 **What happens:**
-1. GPTDiff scans your project files (respecting `.gitignore`)
+1. Patchling scans your project files (respecting `.gitignore`)
 2. Sends the code + your instruction to an AI model
 3. Receives a unified diff with the requested changes
 4. Applies the diff to your files
@@ -47,12 +47,12 @@ Applying changes...
 
 **Tip:** The default model (`gemini-3-pro-preview`) works great for most tasks. For very simple changes, use a faster model:
 ```bash
-gptdiff "Fix typos in comments" --model gemini-2.0-flash --apply
+patchling "Fix typos in comments" --model gemini-2.0-flash --apply
 ```
 
 ## Step 4: Review and Commit
 
-GPTDiff modifies your files directly. Use Git to review and manage changes:
+Patchling modifies your files directly. Use Git to review and manage changes:
 
 ```bash
 # See what changed
@@ -72,29 +72,29 @@ git checkout .
 
 | Command | Behavior | When to Use |
 |---------|----------|-------------|
-| `gptdiff "prompt"` | Creates `prompt.txt` only | Preview what will be sent to AI |
-| `gptdiff "prompt" --call` | Creates `diff.patch` | Review diff before applying |
-| `gptdiff "prompt" --apply` | Applies changes directly | Ready to modify files |
+| `patchling "prompt"` | Creates `prompt.txt` only | Preview what will be sent to AI |
+| `patchling "prompt" --call` | Creates `diff.patch` | Review diff before applying |
+| `patchling "prompt" --apply` | Applies changes directly | Ready to modify files |
 
 **Example: Preview before applying**
 ```bash
 # First, generate and review the diff
-gptdiff "Refactor to async/await" --call
+patchling "Refactor to async/await" --call
 cat diff.patch  # Review the changes
 
 # If it looks good, apply it
-gptpatch diff.patch
+patchling-apply diff.patch
 ```
 
 ---
 
 ## Step 5: Run Continuously (Agent Loops)
 
-GPTDiff becomes even more powerful when you run it in a loop. Instead of making one change at a time, let it continuously improve your codebase:
+Patchling becomes even more powerful when you run it in a loop. Instead of making one change at a time, let it continuously improve your codebase:
 
 ```bash
 while true; do
-  gptdiff "Add missing test cases for edge conditions" --apply
+  patchling "Add missing test cases for edge conditions" --apply
   sleep 5
 done
 ```
@@ -120,11 +120,11 @@ For detailed automation patterns, see the [Agent Loops Guide](examples/automatio
 - **Review first**: Use `--call` to preview changes before applying
 - **Target specific files**: For large codebases, specify directories to reduce context:
   ```bash
-  gptdiff "Add logging" src/api/ src/utils/
+  patchling "Add logging" src/api/ src/utils/
   ```
 - **Expect timing variance**: Complex changes may take 30-60 seconds depending on the model
 - **Always review**: AI-generated code should be checked, especially for error handling and edge cases
-- **Scale up with loops**: Once you're comfortable, run GPTDiff overnight—one user went from 18 to 127 test cases in 8 hours
+- **Scale up with loops**: Once you're comfortable, run Patchling overnight—one user went from 18 to 127 test cases in 8 hours
 
 ---
 
@@ -133,5 +133,5 @@ For detailed automation patterns, see the [Agent Loops Guide](examples/automatio
 - See [basic examples](examples/basic.md) for common use cases
 - Learn about [automation patterns](examples/automation.md)
 - Read the full [CLI Reference](cli.md) for all options
-- Use GPTDiff in Python with the [API Reference](api.md)
+- Use Patchling in Python with the [API Reference](api.md)
 - Having issues? Check the [Troubleshooting Guide](troubleshooting.md)

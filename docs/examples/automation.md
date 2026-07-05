@@ -1,8 +1,8 @@
 # Agent Loops
 
-> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+> **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
-> **Ship improvements while you sleep.** Agent loops are GPTDiff's killer feature—a simple `while true` pattern that turns one-off fixes into continuous, autonomous code improvement.
+> **Ship improvements while you sleep.** Agent loops are Patchling's killer feature—a simple `while true` pattern that turns one-off fixes into continuous, autonomous code improvement.
 
 | Without Agent Loops | With Agent Loops |
 |---------------------|------------------|
@@ -17,7 +17,7 @@
 
 ```bash
 while true; do
-  gptdiff "Add missing test cases for uncovered functions" --apply
+  patchling "Add missing test cases for uncovered functions" --apply
   sleep 10
 done
 ```
@@ -31,7 +31,7 @@ done
 | Functions with tests | 12% | 71% |
 | Edge cases covered | ~5 | 40+ |
 
-Each cycle, GPTDiff identified the next untested function, wrote appropriate test cases, and moved on. No manual intervention required.
+Each cycle, Patchling identified the next untested function, wrote appropriate test cases, and moved on. No manual intervention required.
 
 ## Real Results: Security Hardening Sprint
 
@@ -39,7 +39,7 @@ Each cycle, GPTDiff identified the next untested function, wrote appropriate tes
 
 ```bash
 while true; do
-  gptdiff "Find and fix OWASP Top 10 vulnerabilities" \
+  patchling "Find and fix OWASP Top 10 vulnerabilities" \
     --model deepseek-reasoner \
     --apply
   sleep 30
@@ -63,11 +63,11 @@ Each cycle scanned for a different vulnerability pattern, applied fixes, and mov
 
 ### Autonomous Code Improvement
 
-Agent loops let GPTDiff work continuously on your codebase—finding issues, generating fixes, and applying them automatically. Each cycle makes your code better.
+Agent loops let Patchling work continuously on your codebase—finding issues, generating fixes, and applying them automatically. Each cycle makes your code better.
 
 ```mermaid
 graph LR
-    A[Codebase] --> B(GPTDiff Analysis)
+    A[Codebase] --> B(Patchling Analysis)
     B --> C{Identify Improvement}
     C --> D[Generate Patch]
     D --> E[Apply Changes]
@@ -81,7 +81,7 @@ Run this tonight and check the results tomorrow:
 
 ```bash
 while true; do
-  gptdiff "Find and fix the most obvious code quality issue" --apply
+  patchling "Find and fix the most obvious code quality issue" --apply
   git add -A && git commit -m "Auto-improvement $(date +%H:%M)" 2>/dev/null
   sleep 30
 done
@@ -96,7 +96,7 @@ This loop automatically commits each improvement, giving you a clean history of 
 # Continuously analyze test coverage gaps
 while :
 do
-  gptdiff "Identify and add missing test cases for edge conditions" \
+  patchling "Identify and add missing test cases for edge conditions" \
     --apply \
     --temperature 0.3
 done
@@ -111,7 +111,7 @@ done
 ### Flaky Test Remediation
 ```bash
 while true; do
-  gptdiff "Find and fix intermittent test failures by adding retries/cleanup" \
+  patchling "Find and fix intermittent test failures by adding retries/cleanup" \
     --model deepseek-reasoner \
     --apply
 done
@@ -124,7 +124,7 @@ done
 while true
 do
   # Prioritize worst code first
-  gptdiff "Refactor functions with high complexity scores" \
+  patchling "Refactor functions with high complexity scores" \
     --apply \
     --temperature 0.1
 done
@@ -133,7 +133,7 @@ done
 ### Security Hardening Daemon
 ```bash
 while :; do
-  gptdiff "Find and fix OWASP Top 10 vulnerabilities" \
+  patchling "Find and fix OWASP Top 10 vulnerabilities" \
     --apply \
     --model deepseek-reasoner
 done
@@ -145,7 +145,7 @@ done
 ```bash
 while true;
 do
-  gptdiff "Update documentation to match current implementation" \
+  patchling "Update documentation to match current implementation" \
     --apply \
     --temperature 0.5
 done
@@ -154,6 +154,6 @@ done
 ## Performance Optimization
 ```bash
 while true; do
-  gptdiff "Identify and optimize slow database queries" --apply
+  patchling "Identify and optimize slow database queries" --apply
 done
 ```

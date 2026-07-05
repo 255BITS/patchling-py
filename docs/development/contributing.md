@@ -1,6 +1,6 @@
-# Contributing to GPTDiff
+# Contributing to Patchling
 
-> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+> **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
 ## Development Philosophy
 
@@ -13,8 +13,8 @@
 
 1. **Clone Repository**:
    ```bash
-   git clone https://github.com/255BITS/gptdiff.git
-   cd gptdiff
+   git clone https://github.com/255BITS/patchling-py.git
+   cd patchling
    ```
 
 2. **Install Dependencies**:
@@ -24,7 +24,7 @@
 
 3. **Run Test Suite**:
    ```bash
-   pytest tests/ --cov=gptdiff --cov-report=term-missing
+   pytest tests/ --cov=patchling --cov-report=term-missing
    ```
 
 ## Contribution Workflow
@@ -58,9 +58,9 @@ Test your changes with a simple loop to verify reliability:
 
 ```bash
 while true; do
-  gptdiff "Your test prompt using the new feature" --apply
+  patchling "Your test prompt using the new feature" --apply
   sleep 5
 done
 ```
 
-This helps ensure GPTDiff remains production-ready for autonomous code improvement.
+This helps ensure Patchling remains production-ready for autonomous code improvement.

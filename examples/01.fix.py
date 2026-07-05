@@ -5,7 +5,7 @@
 import sys
 import subprocess
 import os
-from gptdiff.gptdiff import load_project_files, build_environment, smartapply, save_files, generate_diff
+from patchling.core import load_project_files, build_environment, smartapply, save_files, generate_diff
 
 def run_command(command):
     """

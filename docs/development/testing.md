@@ -1,6 +1,6 @@
 # Testing Philosophy & Practices
 
-> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+> **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
 ## Core Testing Principles
 
@@ -32,7 +32,7 @@ def test_smartapply_complex_single_hunk(mocker):
 **Example Mock Setup:**
 ```python
 # Mock LLM response for predictable testing
-mocker.patch('gptdiff.gptdiff.call_llm_for_apply',
+mocker.patch('patchling.patchling.call_llm_for_apply',
     return_value="def new():\n    print('Updated')")
 
 # Verify transformation
@@ -48,7 +48,7 @@ assert "Updated" in updated["file.py"]
 pip install -e .[test]
 
 # Run all tests with coverage
-pytest tests/ --cov=gptdiff --cov-report=term-missing
+pytest tests/ --cov=patchling --cov-report=term-missing
 
 # Target specific test cases
 pytest tests/test_smartapply.py -k "test_smartapply_file_modification"

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from gptdiff.gptdiff import apply_diff
+from patchling.core import apply_diff
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_minimal_new_file_diff(tmp_project_dir_empty):
 
 import pytest
 from pathlib import Path
-from gptdiff.gptdiff import apply_diff
+from patchling.core import apply_diff
 
 @pytest.fixture
 def tmp_project_dir_empty(tmp_path):
@@ -166,6 +166,6 @@ index 1234567..89abcde 100644
  from pathlib import Path"""
 
     # Assume apply_diff is a function that applies the diff
-    from gptdiff.gptdiff import apply_diff
+    from patchling.core import apply_diff
     result = apply_diff(str(tmp_project_dir_with_gptdiff), diff_text)
     assert result is False, "apply_diff should fail, needs smartapply"

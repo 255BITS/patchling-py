@@ -2,7 +2,7 @@
 import subprocess
 import sys
 
-from gptdiff import generate_diff, smartapply, load_project_files, build_environment, save_files
+from patchling import generate_diff, smartapply, load_project_files, build_environment, save_files
 
 
 def run_tests():

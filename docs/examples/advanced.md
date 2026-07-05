@@ -1,11 +1,11 @@
 # Advanced Examples
 
-> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+> **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
 ## Database Layer Migration
 
 ```bash
-gptdiff "Replace raw SQL with SQLAlchemy ORM" \
+patchling "Replace raw SQL with SQLAlchemy ORM" \
     models/ queries/ \
     --apply
 ```
@@ -13,7 +13,7 @@ gptdiff "Replace raw SQL with SQLAlchemy ORM" \
 ## API Versioning
 
 ```bash
-gptdiff "Add v2 API endpoints with backward compatibility" \
+patchling "Add v2 API endpoints with backward compatibility" \
     --model deepseek-reasoner \
     --temperature 0.5 \
     --apply
@@ -27,7 +27,7 @@ gptdiff "Add v2 API endpoints with backward compatibility" \
 ## Internationalization
 
 ```bash
-gptdiff "Extract all UI strings to translation files" \
+patchling "Extract all UI strings to translation files" \
     --files templates/ static/js/ \
     --call
 ```
@@ -38,12 +38,12 @@ Saved in patch.diff
 
 ## Take It Further: Agent Loops
 
-These advanced transformations become even more powerful when run continuously. Instead of a single pass, let GPTDiff iterate until the job is done:
+These advanced transformations become even more powerful when run continuously. Instead of a single pass, let Patchling iterate until the job is done:
 
 ```bash
 # Complete migration in multiple passes
 while true; do
-  gptdiff "Continue migrating raw SQL to SQLAlchemy ORM" \
+  patchling "Continue migrating raw SQL to SQLAlchemy ORM" \
     models/ queries/ \
     --apply
   sleep 5

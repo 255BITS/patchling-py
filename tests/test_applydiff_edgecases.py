@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gptdiff.gptdiff import apply_diff
+from patchling.core import apply_diff
 
 
 @pytest.fixture

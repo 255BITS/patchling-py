@@ -1,5 +1,5 @@
 import pytest
-from gptdiff.gptdiff import color_code_diff
+from patchling.core import color_code_diff
 
 def test_color_code_diff():
     """

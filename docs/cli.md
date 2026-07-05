@@ -1,10 +1,10 @@
-# GPTDiff CLI Reference
+# Patchling CLI Reference
 
-> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+> **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
 ## Core Command Structure
 ```bash
-gptdiff "<transformation-prompt>" [FILES...] [OPTIONS]
+patchling "<transformation-prompt>" [FILES...] [OPTIONS]
 ```
 
 ## Key Options
@@ -19,21 +19,21 @@ Files matching .gitignore pattern or <b>.gptignore</b> patterns are ignored when
 *Example:*  
 ⚠️ Processes files concurrently for performance
 ```bash
-gptdiff "Add null safety checks" --apply src/
+patchling "Add null safety checks" --apply src/
 ```
 
 `--call`  
 **Generate diff without applying**  
 *Example:*  
 ```bash
-gptdiff "Modernize string formatting" --call
+patchling "Modernize string formatting" --call
 ```
 
 `--prepend <file>`
 **Prepend custom instructions from file to system prompt**
 *Example:*
 ```bash
-gptdiff "Modernize string formatting" --prepend style-guide.txt
+patchling "Modernize string formatting" --prepend style-guide.txt
 ```
 `--prepend <file_or_url>`: Prepend custom instructions from the specified file or URL to the system prompt
 
@@ -41,7 +41,7 @@ gptdiff "Modernize string formatting" --prepend style-guide.txt
 **Attach one or more images**
 *Example:*
 ```bash
-gptdiff "Explain the chart in the README and refactor accordingly" --image docs/chart.png --image docs/layout.png
+patchling "Explain the chart in the README and refactor accordingly" --image docs/chart.png --image docs/layout.png
 ```
 Adds each image (base64-encoded) to the request so the LLM can use visual context when generating diffs.
 
@@ -50,7 +50,7 @@ Adds each image (base64-encoded) to the request so the LLM can use visual contex
 *Default:* 0.7  
 *Example:*  
 ```bash
-gptdiff "Refactor legacy API" --temperature 0.3
+patchling "Refactor legacy API" --temperature 0.3
 ```
 
 ### Model Selection
@@ -59,7 +59,7 @@ gptdiff "Refactor legacy API" --temperature 0.3
 *Options:* `gemini-3-pro-preview` (recommended), `gpt-4o` (complex), `gemini-2.0-flash` (fast)
 *Example:*
 ```bash
-gptdiff "Translate docs to French" --model gemini-2.0-flash
+patchling "Translate docs to French" --model gemini-2.0-flash
 ```
 
 ### Scope Management
@@ -67,7 +67,7 @@ gptdiff "Translate docs to French" --model gemini-2.0-flash
 **Target specific paths**  
 *Example:*  
 ```bash
-gptdiff "Update config system" config/ utils/config_loader.py
+patchling "Update config system" config/ utils/config_loader.py
 ```
 
 `--max_tokens <number>`: Set the maximum number of tokens for the API response (default: 30000)
@@ -79,11 +79,11 @@ gptdiff "Update config system" config/ utils/config_loader.py
 **Silence completion alerts**  
 *Example:*  
 ```bash
-gptdiff "Remove deprecated features" --nobeep
+patchling "Remove deprecated features" --nobeep
 ```
 
 ### Environment Variables
-GPTDiff uses the following environment variables:
+Patchling uses the following environment variables:
 - `GPTDIFF_LLM_API_KEY`: API key for the LLM service
 - `GPTDIFF_LLM_BASE_URL`: Base URL for the LLM API (default: https://nano-gpt.com/api/v1/)
 - `GPTDIFF_MODEL`: Default model for generating diffs (default: gemini-3-pro-preview)
@@ -101,12 +101,12 @@ The CLI's `--apply` flag enables **continuous improvement automation**. Wrap any
 
 ```bash
 while true; do
-  gptdiff "Fix bugs and improve code quality" --apply
+  patchling "Fix bugs and improve code quality" --apply
   sleep 5
 done
 ```
 
-This pattern unlocks GPTDiff's most powerful capability—autonomous code improvement that compounds over time. Each iteration finds and fixes issues you'd otherwise spend hours hunting down.
+This pattern unlocks Patchling's most powerful capability—autonomous code improvement that compounds over time. Each iteration finds and fixes issues you'd otherwise spend hours hunting down.
 
 **Real impact:** One overnight loop took test coverage from 18 to 127 cases—what would take 2-3 days of manual work completed while you slept.
 

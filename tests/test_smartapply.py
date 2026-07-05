@@ -1,4 +1,4 @@
-from gptdiff import smartapply
+from patchling import smartapply
 from unittest.mock import patch
 
 def test_smartapply_file_deletion():
@@ -43,7 +43,7 @@ def test_smartapply_file_modification():
     }
 
     # Mock LLM to return modified content
-    with patch('gptdiff.gptdiff.call_llm_for_apply',
+    with patch('patchling.core.call_llm_for_apply',
                return_value="\ndef goodbye():\n    print('Goodbye')"):
 
         updated_files = smartapply(diff_text, original_files)
@@ -68,7 +68,7 @@ def test_smartapply_think_then_modify():
     }
 
     # Mock LLM to return modified content
-    with patch('gptdiff.gptdiff.call_llm_for_apply',
+    with patch('patchling.core.call_llm_for_apply',
                return_value="<think>Hello from thoughts</think>\ndef goodbye():\n    print('Goodbye')"):
 
         updated_files = smartapply(diff_text, original_files)
@@ -90,7 +90,7 @@ new file mode 100644
     original_files = {}
 
     # Mock LLM for new file creation
-    with patch('gptdiff.gptdiff.call_llm_for_apply', return_value="def new_func():\n    print('New function')"):
+    with patch('patchling.core.call_llm_for_apply', return_value="def new_func():\n    print('New function')"):
 
         updated_files = smartapply(diff_text, original_files)
         
@@ -110,7 +110,7 @@ def test_smartapply_modify_nonexistent_file():
     original_files = {}
 
     # Mock LLM to return content for new file
-    with patch('gptdiff.gptdiff.call_llm_for_apply',
+    with patch('patchling.core.call_llm_for_apply',
                return_value="def new_func():\n    print('Created via diff')"):
 
         updated_files = smartapply(diff_text, original_files)
@@ -167,7 +167,7 @@ diff --git a/file2.py b/file2.py
             return "def func2():\n    print('New func2')"
         return original_content
 
-    monkeypatch.setattr('gptdiff.gptdiff.call_llm_for_apply', mock_call_llm)
+    monkeypatch.setattr('patchling.core.call_llm_for_apply', mock_call_llm)
     updated_files = smartapply(diff_text, original_files)
     
     # Verify both target files modified
@@ -234,7 +234,7 @@ def test_smartapply_complex_single_hunk(monkeypatch):
         "        results.append(x ** 2)\n"
         "    return results"
     )
-    monkeypatch.setattr('gptdiff.gptdiff.call_llm_for_apply', lambda *args, **kwargs: expected_content)
+    monkeypatch.setattr('patchling.core.call_llm_for_apply', lambda *args, **kwargs: expected_content)
 
     updated_files = smartapply(diff_text, original_files)
     
@@ -260,7 +260,7 @@ diff --git a/game.js b/game.js
     expected_content = "let player = {\n    class: \"Warrior\",\n};"
     def mock_call_llm(file_path, original_content, file_diff, model, api_key, base_url, extra_prompt=None, max_tokens=None):
         return expected_content
-    monkeypatch.setattr('gptdiff.gptdiff.call_llm_for_apply', mock_call_llm)
+    monkeypatch.setattr('patchling.core.call_llm_for_apply', mock_call_llm)
     updated_files = smartapply(diff_text, original_files)
     assert "game.js" in updated_files, "The new file 'game.js' should be created"
     assert updated_files["game.js"] == expected_content, "The file content should match the diff"

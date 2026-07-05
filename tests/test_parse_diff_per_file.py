@@ -1,5 +1,5 @@
 import unittest
-from gptdiff.gptdiff import parse_diff_per_file
+from patchling.core import parse_diff_per_file
 
 
 class TestParseDiffPerFile(unittest.TestCase):

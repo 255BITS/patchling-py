@@ -1,4 +1,4 @@
-site_name: GPTDiff
+site_name: Patchling
 docs_dir: docs
 site_dir: site
 strict: true
@@ -22,7 +22,7 @@ nav:
   - Installation: installation.md
   - API Reference: api.md
   - CLI Reference: cli.md
-  - gptpatch: gptpatch.md
+  - patchling-apply: patchling-apply.md
   - Agent Loops: examples/automation.md
   - Core Concepts: concepts.md
   - Architecture: concepts/architecture.md
@@ -34,14 +34,14 @@ nav:
       - Contributing Guide: development/contributing.md
   - Troubleshooting: troubleshooting.md
 extra:
-  cname: gptdiff.255labs.xyz
+  cname: patchling.255labs.xyz
   social:
     - name: nanoodle.com
       icon: fontawesome/solid/diagram-project
       link: https://nanoodle.com
-    - name: gptdiff-js
+    - name: patchling
       icon: fontawesome/brands/js
-      link: https://github.com/255BITS/gptdiff-js
+      link: https://github.com/255BITS/patchling
     - name: 255labs.xyz
       icon: fontawesome/solid/globe
       link: https://255labs.xyz

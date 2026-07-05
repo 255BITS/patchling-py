@@ -4,7 +4,7 @@ Example usage of GPTDiff API with generate_diff and smartapply.
 This example demonstrates how to transform a simple codebase using AI-generated diffs.
 """
 
-from gptdiff import generate_diff, smartapply, build_environment
+from patchling import generate_diff, smartapply, build_environment
 import os
 
 # Set the GPTDiff API key

@@ -1,6 +1,6 @@
 import pytest
 
-from gptdiff.gptdiff import swallow_reasoning
+from patchling.core import swallow_reasoning
 
 def test_swallow_reasoning_extraction_simple():
     llm_response = (

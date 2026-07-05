@@ -13,7 +13,7 @@ This tool uses the same patch-application logic as gptdiff.
 import sys
 import argparse
 from pathlib import Path
-from gptdiff.gptdiff import apply_diff, smart_apply_patch, color_code_diff
+from patchling.core import apply_diff, smart_apply_patch, color_code_diff
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
@@ -55,7 +55,7 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
-    import gptdiff.gptdiff as gd
+    import patchling.core as gd
     gd.VERBOSE = args.verbose
     if args.diff:
         diff_text = args.diff

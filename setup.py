@@ -1,20 +1,20 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='gptdiff',
+    name='patchling',
     version='0.8.0',
-    description='Natural-language code transformation as a library: generate unified diffs with LLMs and apply them resiliently with smartapply',
+    description='Natural-language code transformation as a library: generate unified diffs with LLMs and apply them resiliently with smartapply. Formerly gptdiff.',
     author='255labs',
-    url='https://github.com/255BITS/gptdiff',
+    url='https://github.com/255BITS/patchling-py',
     project_urls={
-        'Documentation': 'https://gptdiff.255labs.xyz',
-        'Source': 'https://github.com/255BITS/gptdiff',
-        'Browser/Node port (gptdiff-js)': 'https://github.com/255BITS/gptdiff-js',
-        'Built with gptdiff-js (nanoodle)': 'https://nanoodle.com',
+        'Documentation': 'https://patchling.255labs.xyz',
+        'Source': 'https://github.com/255BITS/patchling-py',
+        'Browser/Node runtime (npm)': 'https://www.npmjs.com/package/patchling',
+        'Built with patchling (nanoodle)': 'https://nanoodle.com',
     },
-    keywords=['llm', 'diff', 'unified-diff', 'patch', 'smartapply', 'code-transformation', 'ai', 'codegen'],
+    keywords=['patchling', 'smartapply', 'llm', 'diff', 'unified-diff', 'patch', 'code-transformation', 'ai', 'codegen', 'gptdiff'],
     packages=find_packages(),  # Use find_packages() to automatically discover packages
-    package_data={'gptdiff': []},  # Add any package data if needed
+    package_data={'patchling': []},  # Add any package data if needed
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
     install_requires=[
@@ -28,8 +28,12 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'gptdiff=gptdiff.gptdiff:main',
-            'gptpatch=gptdiff.gptpatch:main',
+            # New, on-brand commands
+            'patchling=patchling.core:main',
+            'patchling-apply=patchling.gptpatch:main',
+            # Back-compat aliases (former names — keep existing scripts working)
+            'gptdiff=patchling.core:main',
+            'gptpatch=patchling.gptpatch:main',
         ],
     },
     license=None, # Remove license argument

@@ -1,5 +1,5 @@
 import unittest
-from gptdiff.gptdiff import smartapply
+from patchling.core import smartapply
 
 class TestSmartApplyEdgeCase(unittest.TestCase):
     def test_smartapply_think_tag_stripping(self):
@@ -19,7 +19,7 @@ class TestSmartApplyEdgeCase(unittest.TestCase):
         original_files = {"hello.py": "def hello():\n    print('Hello')\n"}
 
         from unittest.mock import patch
-        with patch('gptdiff.gptdiff.call_llm_for_apply', return_value="\ndef goodbye():\n    print('Goodbye')"):
+        with patch('patchling.core.call_llm_for_apply', return_value="\ndef goodbye():\n    print('Goodbye')"):
             updated_files = smartapply(diff_text, original_files)
 
         self.assertIn("def goodbye():", updated_files.get("hello.py", ""))
