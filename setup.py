@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='patchling',
-    version='0.8.0',
+    version='0.8.1',
     description='Natural-language code transformation as a library: generate unified diffs with LLMs and apply them resiliently with smartapply. Formerly gptdiff.',
     author='255labs',
     url='https://github.com/255BITS/patchling-py',
