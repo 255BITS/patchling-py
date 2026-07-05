@@ -2,9 +2,17 @@ from setuptools import setup, find_packages
 
 setup(
     name='gptdiff',
-    version='0.6.1',
-    description='A tool to generate and apply git diffs using LLMs',
+    version='0.7.0',
+    description='Natural-language code transformation as a library: generate unified diffs with LLMs and apply them resiliently with smartapply',
     author='255labs',
+    url='https://github.com/255BITS/gptdiff',
+    project_urls={
+        'Documentation': 'https://gptdiff.255labs.xyz',
+        'Source': 'https://github.com/255BITS/gptdiff',
+        'Browser/Node port (gptdiff-js)': 'https://github.com/255BITS/gptdiff-js',
+        'Built with gptdiff-js (nanoodle)': 'https://nanoodle.com',
+    },
+    keywords=['llm', 'diff', 'unified-diff', 'patch', 'smartapply', 'code-transformation', 'ai', 'codegen'],
     packages=find_packages(),  # Use find_packages() to automatically discover packages
     package_data={'gptdiff': []},  # Add any package data if needed
     long_description=open('README.md').read(),
@@ -22,7 +30,6 @@ setup(
         'console_scripts': [
             'gptdiff=gptdiff.gptdiff:main',
             'gptpatch=gptdiff.gptpatch:main',
-            'plangptdiff=gptdiff.plangptdiff:main',
         ],
     },
     license=None, # Remove license argument

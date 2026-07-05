@@ -1,6 +1,3 @@
-site_name: GPTDiff Docs
-extra:
-  cname: gptdiff.255labs.xyz
 site_name: GPTDiff
 docs_dir: docs
 site_dir: site
@@ -22,10 +19,11 @@ theme:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
-  - Agent Loops: examples/automation.md
+  - Installation: installation.md
+  - API Reference: api.md
   - CLI Reference: cli.md
   - gptpatch: gptpatch.md
-  - API Reference: api.md
+  - Agent Loops: examples/automation.md
   - Core Concepts: concepts.md
   - Architecture: concepts/architecture.md
   - Examples:
@@ -34,8 +32,16 @@ nav:
   - Development:
       - Testing Practices: development/testing.md
       - Contributing Guide: development/contributing.md
+  - Troubleshooting: troubleshooting.md
 extra:
+  cname: gptdiff.255labs.xyz
   social:
+    - name: nanoodle.com
+      icon: fontawesome/solid/diagram-project
+      link: https://nanoodle.com
+    - name: gptdiff-js
+      icon: fontawesome/brands/js
+      link: https://github.com/255BITS/gptdiff-js
     - name: 255labs.xyz
       icon: fontawesome/solid/globe
       link: https://255labs.xyz

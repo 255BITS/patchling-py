@@ -5,5 +5,12 @@ gptdiff.egg-info
 *.pyc
 .jekyll-cache
 _site
+site/
+dist/
+.sass-cache/
+__pycache__/
+worktrees/
+prompt.txt
+diff.patch
 *.orig
 *.rej

@@ -1,5 +1,7 @@
 # Quickstart Guide
 
+> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+
 Get GPTDiff running in under 2 minutes.
 
 ## Step 1: Install

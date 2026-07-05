@@ -1,5 +1,7 @@
 # GPTDiff CLI Reference
 
+> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+
 ## Core Command Structure
 ```bash
 gptdiff "<transformation-prompt>" [FILES...] [OPTIONS]
@@ -116,23 +118,3 @@ This pattern unlocks GPTDiff's most powerful capability—autonomous code improv
 
 See [Agent Loops](examples/automation.md) for battle-tested patterns and advanced configurations.
 
-## plangptdiff
-  
-`plangptdiff` scans your repository with **ripgrep**, selects only the files likely to change (always including anything named *schema*), and writes a ready‑to‑paste prompt to **planprompt.txt**.  
-
-**Usage:**  
-```bash  
-plangptdiff "<natural language command>" [--apply]  
-```  
-
-**Examples:**  
-- Generate a prompt only:  
-  ```bash  
-  plangptdiff "add validation to the signup form"  
-  ```  
-- Generate a prompt and auto‑apply the diff:  
-  ```bash  
-  plangptdiff "upgrade to Django 5" --apply  
-  ```  
-
-The file list is appended to the generated `gptdiff` command so the LLM sees only the files that matter.

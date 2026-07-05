@@ -4,6 +4,8 @@ title: gptpatch
 
 # gptpatch Command-Line Tool
 
+> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+
 `gptpatch` is a companion tool to [GPTDiff](https://github.com/255BITS/gptdiff) that applies unified diffs directly to your project using GPTDiff’s patch logic.
 
 ## Overview

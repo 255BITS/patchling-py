@@ -1,5 +1,7 @@
 # Agent Loops
 
+> **GPTDiff everywhere:** this library also ships for browser and Node as [gptdiff-js](https://github.com/255BITS/gptdiff-js) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
+
 > **Ship improvements while you sleep.** Agent loops are GPTDiff's killer feature—a simple `while true` pattern that turns one-off fixes into continuous, autonomous code improvement.
 
 | Without Agent Loops | With Agent Loops |
