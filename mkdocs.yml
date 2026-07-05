@@ -1,4 +1,5 @@
 site_name: Patchling
+site_url: https://255bits.github.io/patchling-py/
 docs_dir: docs
 site_dir: site
 strict: true
@@ -34,7 +35,6 @@ nav:
       - Contributing Guide: development/contributing.md
   - Troubleshooting: troubleshooting.md
 extra:
-  cname: patchling.255labs.xyz
   social:
     - name: nanoodle.com
       icon: fontawesome/solid/diagram-project

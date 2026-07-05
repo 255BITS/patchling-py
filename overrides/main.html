@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
 {#
-  Top announcement bar shown on every page — mirrors the banner on the
-  gptdiff-js example pages. Points at the browser port and its live demos.
+  Top announcement bar shown on every page. Points at patchling.app (the
+  hub for both the JS and Python ports) and the live browser demos.
 #}
 {% block announce %}
-  <a href="https://github.com/255BITS/gptdiff-js" target="_blank" rel="noopener">gptdiff-js</a>
-  — run gptdiff in the browser, no command line
+  <a href="https://patchling.app" target="_blank" rel="noopener">patchling.app</a>
+  — natural-language code patching for JavaScript &amp; Python
   &nbsp;·&nbsp;
-  <a href="https://255bits.github.io/gptdiff-js-examples/" target="_blank" rel="noopener">live demos</a>
+  <a href="https://255bits.github.io/patchling-examples/" target="_blank" rel="noopener">live demos</a>
 {% endblock %}
