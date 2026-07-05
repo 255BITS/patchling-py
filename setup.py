@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='gptdiff',
-    version='0.7.0',
+    version='0.8.0',
     description='Natural-language code transformation as a library: generate unified diffs with LLMs and apply them resiliently with smartapply',
     author='255labs',
     url='https://github.com/255BITS/gptdiff',
