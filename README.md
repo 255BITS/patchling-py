@@ -17,15 +17,10 @@ print(updated["main.py"])
 
 Files in, files out. No filesystem access required, no agent harness. The hard part — applying an LLM-generated diff that `git apply` would reject — is what `smartapply` solves: per-file, AI-assisted patch resolution that survives fuzzy hunks, renames, new files, and deletions.
 
-📚 Full documentation at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py)
+🌐 Project home: [patchling.app](https://patchling.app) — try it live in your browser · 📚 Full documentation at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py)
 
-Prefer the browser? **[patchling](https://github.com/255BITS/patchling)** is a JavaScript port of
-`generateDiff` + `smartapply` — try the **[live demos →](https://255bits.github.io/patchling-examples/)**.
-
-> **The patchling family** —
-> **patchling** (you are here) ·
-> [**patchling**](https://github.com/255BITS/patchling) (browser-first JS port) ·
-> [**patchling-examples**](https://github.com/255BITS/patchling-examples) (live browser demos)
+Prefer the browser? The same primitive ships on npm as **[patchling for JS](https://github.com/255BITS/patchling)**
+(`generateDiff` + `smartapply`, zero-dependency ESM) — try the **[live demos →](https://255bits.github.io/patchling-examples/)**.
 
 ---
 
@@ -35,12 +30,13 @@ The same primitive exists for every runtime, and it powers a real product:
 
 | Project | What it is |
 |---------|------------|
-| **patchling** (this repo) | Python library + CLI tools — [PyPI](https://pypi.org/project/patchling/) |
-| **[patchling](https://github.com/255BITS/patchling)** | Zero-dependency ESM port for browser and Node — `generateDiff` + `smartapply` on in-memory file maps |
+| **patchling for Python** (this repo) | Python library + CLI tools — [PyPI](https://pypi.org/project/patchling/) |
+| **[patchling for JS](https://github.com/255BITS/patchling)** | Zero-dependency ESM package for browser and Node — `generateDiff` + `smartapply` on in-memory file maps — [npm](https://www.npmjs.com/package/patchling) |
+| **[patchling.app](https://patchling.app)** | Project homepage with a live in-browser demo of the whole diff → smartapply loop |
 | **[nanoodle.com](https://nanoodle.com)** | Visual AI workflow editor built on patchling — no server, no signup, bring your own key. See the primitive working in production |
 | **[Live demos](https://255bits.github.io/patchling-examples/)** | Browser examples: LLM-edited games, 3D scenes, stream overlays, AI characters |
 
-Building for the browser? Start with [patchling](https://github.com/255BITS/patchling). Building a Python backend, pipeline, or your own agent? You're in the right repo.
+Building for the browser? Start with [patchling for JS](https://github.com/255BITS/patchling). Building a Python backend, pipeline, or your own agent? You're in the right repo.
 
 ---
 
@@ -215,7 +211,8 @@ mkdocs serve
 
 ## Related projects
 
-- [patchling](https://github.com/255BITS/patchling) — the browser/Node port
+- [patchling.app](https://patchling.app) — project home, with a live in-browser demo
+- [patchling for JS](https://github.com/255BITS/patchling) — the browser/Node package on [npm](https://www.npmjs.com/package/patchling)
 - [nanoodle.com](https://nanoodle.com) — visual AI workflow editor built on patchling
 - [patchling live demos](https://255bits.github.io/patchling-examples/)
 - [AI Agent Toolbox](https://github.com/255BITS/ai-agent-toolbox) — powers Patchling's tool-call parsing across models
