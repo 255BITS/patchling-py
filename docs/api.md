@@ -190,7 +190,7 @@ set_env("GPTDIFF_MODEL", None)  # fall back to the process environment, then DEF
 def filter_relevant(
     files: Dict[str, str],
     task: str,
-    model: str = None,          # $GPTDIFF_FILTER_MODEL or gemini-2.0-flash
+    model: str = None,          # $GPTDIFF_FILTER_MODEL or xiaomi/mimo-v2.6-flash
     concurrency: int = 8,
     cache=None,                 # RelevanceCache, path, None, or False
     api_key: Optional[str] = None,
@@ -199,17 +199,19 @@ def filter_relevant(
     max_tokens: Optional[int] = 12_000,
     on_oversize: str = "truncate",  # include, exclude, or truncate
     on_binary: str = "exclude",     # include, exclude, or truncate
+    skip_patterns=None,         # lockfile/generated globs; () disables
 ) -> FilterRelevantResult
 ```
 
-Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`.
+Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`. The default model is `xiaomi/mimo-v2.6-flash`.
 
-`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, or `truncated`), and `error` when that file's call failed.
+`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, `truncated`, or `generated`), `error` when that file's call failed or the answer was empty, and `failed_open` for those includes. `result.failed_open` is the list of those files; `result.to_dict()` counts them.
 
 - Checks run with bounded `concurrency`.
-- `cache` is in-memory for the call. Pass a `RelevanceCache` to reuse it, or a filesystem path to persist it. The key is the model, a hash of the task, a hash of the file contents, and a truncation tag.
+- `cache` is in-memory for the call. Pass a `RelevanceCache` to reuse it, or a filesystem path to persist it. The key is the model, a hash of the task, a hash of the file contents, the truncation tag, the output-token limit, and the prompt version. Only a clear `yes` or `no` is stored. Ambiguous answers, empty answers, and errors are not.
 - Binary files and files over the size or token threshold are not sent in full. `include` keeps them without a call, `exclude` drops them, `truncate` asks about a truncated or redacted preview. A `yes` on a truncated file still forwards the original contents.
-- Think tags are stripped before the answer is read. An ambiguous answer or an error includes the file and records why, so a confused model cannot drop a file you needed.
+- Lockfiles and generated bundles (`uv.lock`, `package-lock.json`, `yarn.lock`, `poetry.lock`, `*.min.js`, and similar) are skipped with `skipped_reason="generated"`. Pass `skip_patterns=()` to disable that, or a list of globs to replace it. `build_environment(..., skip_patterns=)` forwards the same option.
+- Think tags are stripped before the answer is read. A non-empty ambiguous answer includes the file and is not cached. An empty answer is an error (failed open), not an ambiguous yes. Timeouts, 5xx responses, and billing-reservation failures are retried with backoff before the file is failed open. Reasoning models are asked not to think and get a larger completion budget so a yes/no is not swallowed by hidden reasoning.
 
 ```python
 from patchling import filter_relevant, generate_diff, smartapply, build_environment

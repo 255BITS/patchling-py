@@ -153,10 +153,14 @@ def test_ambiguous_answer_and_errors_include_the_file():
     assert by_path["broken.py"].decision == "yes"
     assert "connection reset" in by_path["broken.py"].error
     assert "connection reset" in by_path["broken.py"].reason
+    assert by_path["ambiguous.py"].failed_open is False
+    assert by_path["broken.py"].failed_open is True
     assert result.errors == [by_path["broken.py"]]
+    assert result.failed_open == [by_path["broken.py"]]
     summary = format_filter_summary(result)
     assert "connection reset" in summary
     assert "included by default" in summary
+    assert "failed open" in summary
 
 
 def test_errors_are_not_cached():
@@ -635,3 +639,365 @@ def test_model_defaults_to_filter_env(monkeypatch):
     assert seen["base_url"] == "https://example.test/v1/"
     assert seen["api_key"] == "from-arg"
     assert result.model == "env-filter-model"
+
+
+class _StatusError(Exception):
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def test_reasoning_models_get_budget_and_no_effort():
+    from patchling.relevance import (
+        REASONING_MAX_OUTPUT_TOKENS,
+        model_uses_reasoning,
+        output_token_budget,
+        reasoning_effort_for,
+    )
+
+    assert model_uses_reasoning("deepseek-reasoner")
+    assert model_uses_reasoning("openai/o1")
+    assert not model_uses_reasoning("xiaomi/mimo-v2.6-flash")
+    assert not model_uses_reasoning("gemini-2.5-flash-lite")
+    assert not model_uses_reasoning("gpt-4.1-nano")
+    assert output_token_budget("deepseek-reasoner", 256) >= REASONING_MAX_OUTPUT_TOKENS
+    assert output_token_budget("xiaomi/mimo-v2.6-flash", 256) == 256
+    assert reasoning_effort_for("deepseek-reasoner") == "none"
+    assert reasoning_effort_for("xiaomi/mimo-v2.6-flash") is None
+
+    seen = []
+
+    def fake_call_llm(**kwargs):
+        seen.append(kwargs)
+        return _Response("yes the parser is here")
+
+    result = filter_relevant(
+        {"a.py": "def keep():\n    return 1\n"},
+        "edit the parser",
+        model="deepseek-reasoner",
+        cache=False,
+        api_key="test-key",
+        call_llm=fake_call_llm,
+    )
+    assert seen[0]["max_tokens"] >= REASONING_MAX_OUTPUT_TOKENS
+    assert seen[0]["reasoning_effort"] == "none"
+    assert result.decisions[0].decision == "yes"
+    assert result.decisions[0].failed_open is False
+
+
+def test_non_reasoning_default_model_keeps_the_small_budget():
+    seen = []
+
+    def fake_call_llm(**kwargs):
+        seen.append(kwargs)
+        return _Response("no")
+
+    result = filter_relevant(
+        {"a.py": "x = 1\n"},
+        "task",
+        model="xiaomi/mimo-v2.6-flash",
+        cache=False,
+        api_key="test-key",
+        call_llm=fake_call_llm,
+    )
+    assert seen[0]["max_tokens"] == 256
+    assert seen[0]["reasoning_effort"] is None
+    assert result.decisions[0].decision == "no"
+
+
+def test_rejected_reasoning_effort_is_retried_without_it():
+    seen = []
+
+    def fake_call_llm(**kwargs):
+        seen.append(kwargs.get("reasoning_effort"))
+        if kwargs.get("reasoning_effort"):
+            raise _StatusError("400 invalid reasoning_effort: unsupported", 400)
+        return _Response("no — unrelated")
+
+    result = filter_relevant(
+        {"a.py": "x = 1\n"},
+        "task",
+        model="deepseek-reasoner",
+        cache=False,
+        api_key="test-key",
+        call_llm=fake_call_llm,
+    )
+    assert seen == ["none", None]
+    assert result.decisions[0].decision == "no"
+    assert result.decisions[0].error is None
+    assert result.failed_open == []
+
+
+def test_empty_answer_is_an_error_and_is_not_cached():
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Response("<think>the whole budget went here</think>   ")
+        return _Response("no")
+
+    cache = RelevanceCache()
+    files = {"a.py": "print('a')\n"}
+    kwargs = dict(model="deepseek-reasoner", cache=cache, api_key="test-key", call_llm=fake_call_llm, task="edit a")
+    first = filter_relevant(files, **kwargs)
+    assert first.decisions[0].decision == "yes"
+    assert first.decisions[0].failed_open is True
+    assert first.decisions[0].error == "empty answer"
+    assert "a.py" in first.files
+    assert len(first.failed_open) == 1
+    assert "failed open" in format_filter_summary(first)
+    assert cache.get(first.decisions[0].cache_key) is None
+
+    second = filter_relevant(files, **kwargs)
+    assert calls["n"] == 2
+    assert second.decisions[0].decision == "no"
+    assert second.decisions[0].failed_open is False
+    assert second.decisions[0].cached is False
+    third = filter_relevant(files, **kwargs)
+    assert third.decisions[0].cached is True
+    assert calls["n"] == 2
+
+
+def test_ambiguous_answers_are_not_cached():
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Response("maybe later")
+        return _Response("no")
+
+    cache = RelevanceCache()
+    files = {"a.py": "x = 1\n"}
+    first = filter_relevant(files, "task", model="fake", cache=cache, api_key="k", call_llm=fake_call_llm)
+    second = filter_relevant(files, "task", model="fake", cache=cache, api_key="k", call_llm=fake_call_llm)
+    assert first.decisions[0].decision == "yes"
+    assert first.decisions[0].error is None
+    assert first.decisions[0].failed_open is False
+    assert second.decisions[0].decision == "no"
+    assert calls["n"] == 2
+
+
+def test_cache_key_includes_output_limit_and_prompt_version():
+    from patchling.relevance import PROMPT_VERSION
+
+    base = dict(model="m", task="task", content="body", variant="full")
+    low = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version=PROMPT_VERSION)
+    high = RelevanceCache.make_key(**base, max_output_tokens=4096, prompt_version=PROMPT_VERSION)
+    other = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version="9")
+    assert len({low, high, other}) == 3
+    assert "256" in low and PROMPT_VERSION in low
+
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("no")
+
+    cache = RelevanceCache()
+    files = {"a.py": "x = 1\n"}
+    filter_relevant(files, "task", model="m", cache=cache, api_key="k", max_output_tokens=256, call_llm=fake_call_llm)
+    filter_relevant(files, "task", model="m", cache=cache, api_key="k", max_output_tokens=128, call_llm=fake_call_llm)
+    filter_relevant(files, "task", model="m", cache=cache, api_key="k", max_output_tokens=256, call_llm=fake_call_llm)
+    assert calls["n"] == 2
+
+
+def test_transient_errors_retry_with_backoff_then_succeed():
+    calls = {"n": 0}
+    sleeps = []
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _StatusError("503 billing reservation", 503)
+        return _Response("yes")
+
+    result = filter_relevant(
+        {"a.py": "x = 1\n"},
+        "task",
+        model="fake",
+        cache=False,
+        api_key="k",
+        max_attempts=3,
+        retry_backoff=0.5,
+        sleep=sleeps.append,
+        call_llm=fake_call_llm,
+    )
+    assert calls["n"] == 3
+    assert sleeps == [0.5, 1.0]
+    assert result.decisions[0].decision == "yes"
+    assert result.decisions[0].error is None
+    assert result.failed_open == []
+
+
+def test_exhausted_timeouts_fail_open_and_are_not_cached():
+    calls = {"n": 0}
+    sleeps = []
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        raise TimeoutError("request timed out")
+
+    cache = RelevanceCache()
+    files = {"a.py": "x = 1\n"}
+    kwargs = dict(
+        model="fake",
+        cache=cache,
+        api_key="k",
+        max_attempts=3,
+        retry_backoff=0.5,
+        sleep=sleeps.append,
+        call_llm=fake_call_llm,
+        task="task",
+    )
+    result = filter_relevant(files, **kwargs)
+    assert calls["n"] == 3
+    assert sleeps == [0.5, 1.0]
+    assert result.decisions[0].decision == "yes"
+    assert result.decisions[0].failed_open is True
+    assert "timed out" in result.decisions[0].error
+    assert "1 failed open" in format_filter_summary(result)
+    assert cache.get(result.decisions[0].cache_key) is None
+
+    def succeed(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("no")
+
+    kwargs["call_llm"] = succeed
+    second = filter_relevant(files, **kwargs)
+    assert second.decisions[0].decision == "no"
+    assert calls["n"] == 4
+
+
+def test_non_transient_errors_are_not_retried():
+    calls = {"n": 0}
+    sleeps = []
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        raise RuntimeError("connection reset")
+
+    result = filter_relevant(
+        {"a.py": "x = 1\n"},
+        "task",
+        model="fake",
+        cache=False,
+        api_key="k",
+        sleep=sleeps.append,
+        call_llm=fake_call_llm,
+    )
+    assert calls["n"] == 1
+    assert sleeps == []
+    assert result.decisions[0].failed_open is True
+
+
+def test_lockfiles_and_generated_files_are_skipped_by_default():
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("yes")
+
+    files = {
+        "uv.lock": "version = 1\n",
+        "package-lock.json": "{}\n",
+        "yarn.lock": "# yarn\n",
+        "poetry.lock": "# poetry\n",
+        "src/app.min.js": "function(){}\n",
+        "src/app.py": "def keep():\n    return 1\n",
+    }
+    result = filter_relevant(files, "edit the app", model="fake", cache=False, api_key="k", call_llm=fake_call_llm)
+    assert calls["n"] == 1
+    by_path = {d.path: d for d in result.decisions}
+    for path in ("uv.lock", "package-lock.json", "yarn.lock", "poetry.lock", "src/app.min.js"):
+        assert by_path[path].decision == "no"
+        assert by_path[path].skipped_reason == "generated"
+        assert path not in result.files
+    assert "src/app.py" in result.files
+
+
+def test_skip_patterns_are_configurable():
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("yes")
+
+    files = {"uv.lock": "lock\n", "notes.tmp": "temp\n", "a.py": "x = 1\n"}
+    sent = filter_relevant(
+        files, "task", model="fake", cache=False, api_key="k", skip_patterns=(), call_llm=fake_call_llm
+    )
+    assert calls["n"] == 3
+    assert set(sent.files) == set(files)
+
+    calls["n"] = 0
+    custom = filter_relevant(
+        files,
+        "task",
+        model="fake",
+        cache=False,
+        api_key="k",
+        skip_patterns=["*.tmp"],
+        call_llm=fake_call_llm,
+    )
+    by_path = {d.path: d for d in custom.decisions}
+    assert by_path["notes.tmp"].skipped_reason == "generated"
+    assert by_path["notes.tmp"].decision == "no"
+    assert by_path["uv.lock"].decision == "yes"
+    assert calls["n"] == 2
+
+
+def test_default_filter_model_is_mimo_flash(monkeypatch):
+    monkeypatch.delenv("GPTDIFF_FILTER_MODEL", raising=False)
+    seen = {}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        seen["model"] = model
+        return _Response("yes")
+
+    result = filter_relevant(
+        {"a.py": "x = 1\n"},
+        "task",
+        cache=False,
+        api_key="from-arg",
+        call_llm=fake_call_llm,
+    )
+    assert seen["model"] == "xiaomi/mimo-v2.6-flash"
+    assert result.model == "xiaomi/mimo-v2.6-flash"
+
+
+def test_cli_skip_generated_flags(monkeypatch):
+    from patchling.core import _apply_relevance_filter
+
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("yes")
+
+    monkeypatch.setattr("patchling.core.call_llm", fake_call_llm)
+    monkeypatch.setenv("GPTDIFF_LLM_API_KEY", "test-key")
+
+    class Args:
+        filter_model = "fake"
+        filter_concurrency = 2
+        filter_cache = False
+        filter_oversize = "truncate"
+        filter_binary = "exclude"
+        filter_max_bytes = None
+        filter_max_tokens = None
+        filter_decisions = None
+        verbose = False
+        filter_skip_pattern = None
+        filter_no_skip_generated = False
+
+    files = [("uv.lock", "lock\n"), ("a.py", "x = 1\n")]
+    narrowed = _apply_relevance_filter(files, "task", Args())
+    assert calls["n"] == 1
+    assert [path for path, _content in narrowed] == ["a.py"]
+
+    Args.filter_no_skip_generated = True
+    narrowed = _apply_relevance_filter(files, "task", Args())
+    assert calls["n"] == 3
+    assert [path for path, _content in narrowed] == ["uv.lock", "a.py"]

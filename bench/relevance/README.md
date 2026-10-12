@@ -12,7 +12,7 @@ The script reports precision, recall, and F1. Paths in the label list that the s
 
 It also reports tokens and estimated cost against sending the whole tree. Prices are USD per million tokens and default to placeholders (`--filter-input-price`, `--filter-output-price`, `--diff-input-price`, `--diff-output-price`). Replace them with the prices for the models you run. `smartapply` does not report usage, so its tokens are not in the total.
 
-With a live key it then runs `generate_diff` and `smartapply` twice: once on every file, once on the files the filter kept. Both diffs are applied back onto the original tree (files the filter dropped stay untouched) and the script reports whether the diffs match, how similar they are, and which paths ended up with different contents.
+With a live key it then runs `generate_diff` and `smartapply` twice: once on every file, once on the files the filter kept. Both diffs are applied back onto the original tree (files the filter dropped stay untouched) and the script reports whether the diffs match, how similar they are, and which paths ended up with different contents. The JSON report stores each pipeline's diff text and applied file map. If one `generate_diff` or `smartapply` call fails, that error is recorded and the other pipeline is still written; the script does not stop.
 
 ## Run
 
@@ -26,7 +26,7 @@ python bench/relevance/run.py \
   --repo /path/to/repo \
   --task "Add structured logging to the API handlers" \
   --labels bench/relevance/labels.example.json \
-  --filter-model gemini-2.0-flash \
+  --filter-model xiaomi/mimo-v2.6-flash \
   --output report.json
 ```
 
@@ -34,4 +34,4 @@ Labels are either a JSON list, a JSON object with a `relevant` array, or a text 
 
 `--skip-diff` scores the filter only. Cost then uses input-token estimates and does not include a model completion. `--decisions report.json` rescores a saved decision list; together with `--skip-diff` this does not call a model and does not require `LIVE_LLM`.
 
-`--cache path.json` is the on-disk relevance cache (`model`, task hash, file-content hash).
+`--cache path.json` is the on-disk relevance cache (model, task hash, file-content hash, output-token limit, prompt version). Clear yes/no answers are stored. The default filter model is `xiaomi/mimo-v2.6-flash`. The printed summary counts files that were included because the model returned an empty answer or the call failed after retries.

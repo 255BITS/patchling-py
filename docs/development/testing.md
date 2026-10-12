@@ -43,7 +43,7 @@ assert "Updated" in updated["file.py"]
 
 ## Relevance filter
 
-`tests/test_relevance.py` mocks the LLM. `tests/test_relevance_live.py` is skipped unless `LIVE_LLM=1`, in which case it reads `GPTDIFF_LLM_API_KEY` and calls the configured endpoint. CI does not set `LIVE_LLM`, so it never makes that call. The benchmark in `bench/relevance/` uses the same gate.
+`tests/test_relevance.py` mocks the LLM. It covers the reasoning-model completion budget, empty answers counted as failed open, cache keys, transient retries, lockfile skips, and the default filter model. `tests/test_relevance_live.py` is skipped unless `LIVE_LLM=1`, in which case it reads `GPTDIFF_LLM_API_KEY` and calls the configured endpoint. CI does not set `LIVE_LLM`, so it never makes that call. The benchmark in `bench/relevance/` uses the same gate. `tests/test_relevance_bench.py` checks that a single `generate_diff` failure is stored in the JSON report with the other pipeline's diff and applied files.
 
 ## Running the Test Suite
 

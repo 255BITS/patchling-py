@@ -209,3 +209,121 @@ def test_benchmark_script_scores_saved_decisions_without_a_key(tmp_path):
     )
     assert blocked.returncode == 2
     assert "LIVE_LLM=1" in blocked.stderr
+
+
+def _bench_run():
+    path = Path(__file__).resolve().parents[1] / "bench" / "relevance" / "run.py"
+    spec = importlib.util.spec_from_file_location("relevance_bench_run", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_PRICES = {
+    "filter_input": 0.10,
+    "filter_output": 0.40,
+    "diff_input": 1.25,
+    "diff_output": 10.0,
+}
+
+
+def test_one_generate_diff_failure_is_saved_with_the_other_pipeline(monkeypatch):
+    run = _bench_run()
+    calls = {"n": 0}
+
+    def generate(files, task, model, api_key, base_url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("generate failed")
+        return "--- a/a.py\n+++ b/a.py\n", {
+            "prompt_tokens": 3,
+            "completion_tokens": 1,
+            "total_tokens": 4,
+        }
+
+    monkeypatch.setattr(run, "generate_diff_with_usage", generate)
+    monkeypatch.setattr("patchling.smartapply", lambda *args, **kwargs: {"a.py": "changed\n"})
+
+    files = {"a.py": "old\n"}
+    full = run.run_pipeline(files, "task", "m", "m", "k", "http://example.test/v1")
+    filtered = run.run_pipeline(files, "task", "m", "m", "k", "http://example.test/v1")
+    assert full["diff"] is None
+    assert full["applied"] is None
+    assert "generate failed" in full["error"]
+    assert filtered["diff"] == "--- a/a.py\n+++ b/a.py\n"
+    assert filtered["applied"] == {"a.py": "changed\n"}
+    assert filtered["error"] is None
+
+    report = run.build_report(
+        repo="repo",
+        task="task",
+        decisions=[{"path": "a.py", "decision": "yes", "cached": False, "prompt_tokens": 1, "completion_tokens": 1}],
+        relevant=["a.py"],
+        files=files,
+        prices=_PRICES,
+        filter_model="xiaomi/mimo-v2.6-flash",
+        diff_full=full,
+        diff_filtered=filtered,
+    )
+    assert report["pipelines"]["full"]["error"]
+    assert report["pipelines"]["full"]["diff"] is None
+    assert report["pipelines"]["filtered"]["diff"] == filtered["diff"]
+    assert report["pipelines"]["filtered"]["applied"] == {"a.py": "changed\n"}
+    assert report["diff_quality"] is None
+    text = run.format_report(report)
+    assert "generate failed" in text
+    assert "unavailable" in text
+
+
+def test_smartapply_failure_keeps_the_diff(monkeypatch):
+    run = _bench_run()
+
+    def generate(files, task, model, api_key, base_url):
+        return "DIFF", {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4}
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("apply boom")
+
+    monkeypatch.setattr(run, "generate_diff_with_usage", generate)
+    monkeypatch.setattr("patchling.smartapply", explode)
+    outcome = run.run_pipeline({"a.py": "old\n"}, "task", "m", "m", "k", "http://example.test/v1")
+    assert outcome["diff"] == "DIFF"
+    assert outcome["applied"] is None
+    assert "apply boom" in outcome["error"]
+
+
+def test_both_pipelines_store_diffs_and_applied_files(monkeypatch):
+    run = _bench_run()
+
+    def generate(files, task, model, api_key, base_url):
+        body = files.get("a.py", "")
+        return f"diff:{body}", {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}
+
+    monkeypatch.setattr(run, "generate_diff_with_usage", generate)
+    monkeypatch.setattr(
+        "patchling.smartapply",
+        lambda diff, files, **kwargs: {path: content + "!" for path, content in files.items()},
+    )
+    files = {"a.py": "old\n", "b.py": "b\n"}
+    kept = {"a.py": "old\n"}
+    full = run.run_pipeline(files, "task", "m", "m", "k", "http://example.test/v1")
+    filtered = run.run_pipeline(kept, "task", "m", "m", "k", "http://example.test/v1")
+    report = run.build_report(
+        repo="repo",
+        task="task",
+        decisions=[
+            {"path": "a.py", "decision": "yes", "cached": False, "prompt_tokens": 1, "completion_tokens": 0},
+            {"path": "b.py", "decision": "no", "cached": False, "prompt_tokens": 1, "completion_tokens": 0},
+        ],
+        relevant=["a.py"],
+        files=files,
+        prices=_PRICES,
+        filter_model="m",
+        diff_full=full,
+        diff_filtered=filtered,
+    )
+    assert report["pipelines"]["full"]["diff"] == "diff:old\n"
+    assert report["pipelines"]["full"]["applied"]["b.py"] == "b\n!"
+    assert report["pipelines"]["filtered"]["applied"] == {"a.py": "old\n!"}
+    assert report["pipelines"]["full"]["error"] is None
+    assert report["diff_quality"] is not None

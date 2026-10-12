@@ -5,28 +5,71 @@ file, a cheap OpenAI-compatible model is asked whether the file is relevant
 to the task. Only ``yes`` files are returned for ``generate_diff`` and
 ``smartapply``.
 
-Ambiguous answers and per-file errors default to include, and the error is
-attached to that file's decision so callers can see it.
+A non-empty ambiguous answer includes the file and is not cached. An empty
+answer is an error, not an ambiguous yes: the file is included (failed open),
+the decision is not cached, and the summary counts it. Transient call errors
+are retried before that. Lockfiles and generated bundles are skipped.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
+import inspect
 import json
 import os
 import re
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional
 
-DEFAULT_FILTER_MODEL = "gemini-2.0-flash"
+# xiaomi/mimo-v2.6-flash had perfect recall and the best precision on a
+# pallets/flask labeling pass. gemini-2.5-flash-lite kept several times as
+# many files; gpt-4.1-nano missed relevant ones.
+DEFAULT_FILTER_MODEL = "xiaomi/mimo-v2.6-flash"
 DEFAULT_CONCURRENCY = 8
 DEFAULT_MAX_BYTES = 200_000
 DEFAULT_MAX_TOKENS = 12_000
 DEFAULT_MAX_OUTPUT_TOKENS = 256
+# Reasoning models can spend a small completion budget on hidden reasoning and
+# return an empty answer. Give them room for a yes/no after that, and ask the
+# provider not to reason.
+REASONING_MAX_OUTPUT_TOKENS = 4096
+REASONING_EFFORT = "none"
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF = 0.5
+# Bump when the prompt or the yes/no contract changes so old cache rows miss.
+PROMPT_VERSION = "2"
 DEFAULT_BASE_URL = "https://nano-gpt.com/api/v1/"
+
+# Lockfiles and generated bundles are not useful edit targets. Callers can
+# replace this list, or pass an empty sequence to disable it.
+DEFAULT_SKIP_PATTERNS = (
+    "uv.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "npm-shrinkwrap.json",
+    "bun.lock",
+    "bun.lockb",
+    "composer.lock",
+    "Gemfile.lock",
+    "Cargo.lock",
+    "*.min.js",
+    "*.min.mjs",
+    "*.min.css",
+)
+
+_REASONING_MODEL = re.compile(
+    r"(reasoner|reasoning|:thinking|-thinking|\bthinking\b|"
+    r"(^|[/:])o[134]($|[/:_-])|gpt-5|deepseek-r1|\br1\b|qwq|magistral)",
+    re.IGNORECASE,
+)
 
 _POLICIES = ("include", "exclude", "truncate")
 
@@ -60,8 +103,9 @@ class RelevanceDecision:
     before parsing, when a model was called. ``tokens`` is the total token
     count of that call (0 when no call was made). ``cached`` is true when the
     judgment was reused. ``skipped_reason`` is set when the file was not sent
-    in full (``binary``, ``oversize``, or ``truncated``). ``error`` is set
-    when the call failed; the file is still included.
+    in full (``binary``, ``oversize``, ``truncated``, or ``generated``).
+    ``error`` is set when the call failed or the model returned an empty
+    answer; the file is still included. ``failed_open`` marks that case.
     """
 
     path: str
@@ -74,6 +118,7 @@ class RelevanceDecision:
     cached: bool = False
     skipped_reason: Optional[str] = None
     error: Optional[str] = None
+    failed_open: bool = False
     cache_key: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -107,6 +152,11 @@ class FilterRelevantResult:
     def billed_tokens(self) -> int:
         return sum(d.tokens for d in self.decisions if not d.cached)
 
+    @property
+    def failed_open(self) -> list:
+        """Files included because the model returned an empty answer or the call failed."""
+        return [d for d in self.decisions if d.failed_open]
+
     def to_dict(self) -> dict:
         return {
             "model": self.model,
@@ -116,14 +166,18 @@ class FilterRelevantResult:
             "billed_prompt_tokens": self.billed_prompt_tokens,
             "billed_completion_tokens": self.billed_completion_tokens,
             "errors": [d.to_dict() for d in self.errors],
+            "failed_open": len(self.failed_open),
         }
 
 
 class RelevanceCache:
     """In-memory relevance cache with an optional on-disk JSON file.
 
-    Keys are ``(model, task hash, file content hash)`` plus a variant tag so a
-    judgment made on a truncated body is not reused as a full-content judgment.
+    Keys are the model, a hash of the task, a hash of the file contents, the
+    truncation variant, the output-token limit, and the prompt version. A
+    judgment made on a truncated body, or under a smaller completion budget,
+    is not reused as a full-content judgment. Fallback and error decisions
+    are not stored.
     """
 
     def __init__(self, path: Optional[os.PathLike | str] = None):
@@ -134,10 +188,24 @@ class RelevanceCache:
             self._load()
 
     @staticmethod
-    def make_key(model: str, task: str, content: str, variant: str = "full") -> str:
+    def make_key(
+        model: str,
+        task: str,
+        content: str,
+        variant: str = "full",
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        prompt_version: str = PROMPT_VERSION,
+    ) -> str:
         task_hash = hashlib.sha256(task.encode("utf-8")).hexdigest()
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        return f"{model}\n{task_hash}\n{content_hash}\n{variant}"
+        return "\n".join([
+            model,
+            task_hash,
+            content_hash,
+            variant,
+            str(max_output_tokens),
+            str(prompt_version),
+        ])
 
     def get(self, key: str):
         with self._lock:
@@ -232,7 +300,99 @@ def _check_policy(name: str, value: str) -> str:
 
 
 def _resolve_model(model: Optional[str]) -> str:
-    return model or os.getenv("GPTDIFF_FILTER_MODEL") or DEFAULT_FILTER_MODEL
+    from .env import get_env
+
+    return model or get_env("GPTDIFF_FILTER_MODEL") or DEFAULT_FILTER_MODEL
+
+
+def model_uses_reasoning(model: Optional[str]) -> bool:
+    """True when the model name looks like it spends completion tokens on reasoning."""
+    if not model:
+        return False
+    return _REASONING_MODEL.search(model) is not None
+
+
+def output_token_budget(model: Optional[str], requested: int) -> int:
+    """Raise the completion budget for reasoning models so a yes/no still fits."""
+    requested = int(requested)
+    if model_uses_reasoning(model):
+        return max(requested, REASONING_MAX_OUTPUT_TOKENS)
+    return requested
+
+
+def reasoning_effort_for(model: Optional[str]) -> Optional[str]:
+    """Ask reasoning models not to think. A yes/no check does not need it."""
+    if model_uses_reasoning(model):
+        return REASONING_EFFORT
+    return None
+
+
+def path_is_skipped(path: str, patterns) -> bool:
+    """Match a skip glob against the basename and the full relative path."""
+    normalized = str(path).replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1]
+    for pattern in patterns:
+        if fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(normalized, pattern):
+            return True
+    return False
+
+
+def is_transient_error(exc: BaseException) -> bool:
+    """Timeouts, 5xx responses, and provider billing-reservation 503s."""
+    name = type(exc).__name__.lower()
+    if isinstance(exc, TimeoutError) or "timeout" in name or "timedout" in name:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+    try:
+        status_code = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status_code = None
+    if status_code is not None and status_code >= 500:
+        return True
+    text = str(exc).lower()
+    if "timed out" in text or "timeout" in text:
+        return True
+    if "billing reservation" in text:
+        return True
+    if any(token in text for token in (" 502", " 503", " 504", "status 502", "status 503", "status 504")):
+        return True
+    if text.startswith("502") or text.startswith("503") or text.startswith("504"):
+        return True
+    return False
+
+
+def _reasoning_effort_rejected(exc: BaseException) -> bool:
+    """The provider refused reasoning_effort. Retry once without it."""
+    status = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    if "reasoning" not in text:
+        return False
+    if status is None:
+        return "400" in text or "unsupported" in text or "invalid" in text
+    try:
+        return int(status) < 500
+    except (TypeError, ValueError):
+        return False
+
+
+def _call_compatible(call, **kwargs):
+    """Drop keyword arguments the injected client does not accept.
+
+    Unit tests pass a narrow fake. The real ``call_llm`` accepts
+    ``reasoning_effort``.
+    """
+    try:
+        signature = inspect.signature(call)
+    except (TypeError, ValueError):
+        return call(**kwargs)
+    params = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return call(**kwargs)
+    accepted = {name: value for name, value in kwargs.items() if name in params}
+    return call(**accepted)
 
 
 def _resolve_cache(cache):
@@ -357,6 +517,7 @@ def _decision_from_record(path: str, record: dict, cached: bool) -> RelevanceDec
         cached=cached,
         skipped_reason=record.get("skipped_reason"),
         error=record.get("error"),
+        failed_open=bool(record.get("failed_open")),
         cache_key=record.get("cache_key"),
     )
 
@@ -386,6 +547,29 @@ def _build_user_prompt(task: str, paths, body: str, note: Optional[str]) -> str:
     return "\n\n".join(parts)
 
 
+def _complete(
+    *,
+    call,
+    api_key,
+    base_url,
+    model,
+    messages,
+    max_output_tokens,
+    reasoning_effort,
+):
+    return _call_compatible(
+        call,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        messages=messages,
+        max_tokens=max_output_tokens,
+        temperature=0.0,
+        budget_tokens=None,
+        reasoning_effort=reasoning_effort,
+    )
+
+
 def _ask(
     *,
     call,
@@ -397,6 +581,7 @@ def _ask(
     body,
     note,
     max_output_tokens,
+    reasoning_effort,
 ):
     user_prompt = _build_user_prompt(task, paths, body, note)
     user_content = user_prompt
@@ -406,15 +591,29 @@ def _ask(
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
-    response = call(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        messages=messages,
-        max_tokens=max_output_tokens,
-        temperature=0.0,
-        budget_tokens=None,
-    )
+    try:
+        response = _complete(
+            call=call,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            messages=messages,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+        )
+    except Exception as exc:
+        if reasoning_effort and _reasoning_effort_rejected(exc):
+            response = _complete(
+                call=call,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                messages=messages,
+                max_output_tokens=max_output_tokens,
+                reasoning_effort=None,
+            )
+        else:
+            raise
     return _usage_and_text(response)
 
 
@@ -432,6 +631,10 @@ def filter_relevant(
     on_oversize: str = "truncate",
     on_binary: str = "exclude",
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+    skip_patterns=None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    retry_backoff: float = DEFAULT_RETRY_BACKOFF,
+    sleep: Optional[Callable[[float], None]] = None,
     call_llm: Optional[Callable] = None,
 ):
     """Ask a cheap model which files are relevant to ``task``.
@@ -445,15 +648,19 @@ def filter_relevant(
     ``cache`` is a :class:`RelevanceCache`, a filesystem path (memory plus that
     file), ``None`` (a fresh in-memory cache for this call), or ``False``
     (disabled). The cache key is the model, a hash of the task, a hash of the
-    file contents, and a truncation variant.
+    file contents, the truncation variant, the output-token limit, and
+    ``PROMPT_VERSION``. Clear yes/no answers are cached. Empty answers,
+    ambiguous answers, and errors are not.
 
     Binary files and files over ``max_bytes`` / ``max_tokens`` are not sent in
     full. ``on_binary`` and ``on_oversize`` are ``include`` (keep, no model
     call), ``exclude`` (drop, no model call), or ``truncate`` (ask the model
     about a truncated or redacted preview). Pass ``None`` for ``max_bytes`` or
-    ``max_tokens`` to disable that limit. Credentials resolve the same way as
-    the rest of the library: explicit ``api_key`` / ``base_url``, then
-    ``GPTDIFF_LLM_API_KEY`` and ``GPTDIFF_LLM_BASE_URL``.
+    ``max_tokens`` to disable that limit. ``skip_patterns`` defaults to
+    lockfiles and minified bundles; pass an empty sequence to disable that.
+    Credentials resolve the same way as the rest of the library: explicit
+    ``api_key`` / ``base_url``, then ``GPTDIFF_LLM_API_KEY`` and
+    ``GPTDIFF_LLM_BASE_URL`` (including ``set_env`` overrides).
     """
     if not isinstance(files, dict):
         raise TypeError("files must be a dict of path -> content")
@@ -466,14 +673,19 @@ def filter_relevant(
     on_binary = _check_policy("on_binary", on_binary)
 
     model = _resolve_model(model)
+    output_budget = output_token_budget(model, max_output_tokens)
+    effort = reasoning_effort_for(model)
     cache_obj = _resolve_cache(cache)
     encoder = _encoder()
+    patterns = DEFAULT_SKIP_PATTERNS if skip_patterns is None else tuple(skip_patterns)
+    max_attempts = max(1, int(max_attempts))
+    if sleep is None:
+        sleep = time.sleep
 
-    if api_key is None:
-        api_key = os.getenv("GPTDIFF_LLM_API_KEY")
-    if not base_url:
-        base_url = os.getenv("GPTDIFF_LLM_BASE_URL", DEFAULT_BASE_URL)
-    base_url = base_url or DEFAULT_BASE_URL
+    from .core import resolve_api_key, resolve_base_url
+
+    api_key = resolve_api_key(api_key)
+    base_url = resolve_base_url(base_url)
 
     if call_llm is None:
         from .core import call_llm as call_llm  # noqa: PLW0621
@@ -484,6 +696,14 @@ def filter_relevant(
     group_order: list[str] = []
 
     for path, content in files.items():
+        if path_is_skipped(path, patterns):
+            by_path[path] = _skip_decision(
+                path,
+                "no",
+                "generated",
+                "skipped lockfile or generated file",
+            )
+            continue
         binary = is_binary_content(content)
         text = _coerce_text(content)
         if binary:
@@ -494,7 +714,7 @@ def filter_relevant(
                 )
                 body = f"[binary file, {len(content) if isinstance(content, (bytes, bytearray)) else len(text.encode('utf-8'))} bytes, contents omitted]"
                 variant = "binary-preview"
-                item = _pending_item(path, text, body, note, "truncated", variant, task, model)
+                item = _pending_item(path, text, body, note, "truncated", variant, task, model, output_budget)
                 _enqueue(groups, group_order, item)
             else:
                 decision = "yes" if on_binary == "include" else "no"
@@ -519,7 +739,7 @@ def filter_relevant(
                     f"({n_bytes} bytes, {n_tokens} tokens). Judge from the portion shown."
                 )
                 variant = f"truncated:{max_tokens}:{max_bytes}"
-                item = _pending_item(path, text, body, note, "truncated", variant, task, model)
+                item = _pending_item(path, text, body, note, "truncated", variant, task, model, output_budget)
                 _enqueue(groups, group_order, item)
             else:
                 decision = "yes" if on_oversize == "include" else "no"
@@ -535,14 +755,19 @@ def filter_relevant(
                 )
             continue
 
-        item = _pending_item(path, text, text, None, None, "full", task, model)
+        item = _pending_item(path, text, text, None, None, "full", task, model, output_budget)
         _enqueue(groups, group_order, item)
 
     def _cached(key: str) -> bool:
         if cache_obj is None:
             return False
         hit = cache_obj.get(key)
-        return bool(hit and hit.get("decision") in ("yes", "no") and not hit.get("error"))
+        return bool(
+            hit
+            and hit.get("decision") in ("yes", "no")
+            and not hit.get("error")
+            and not hit.get("failed_open")
+        )
 
     if any(not _cached(key) for key in group_order) and not api_key:
         raise RuntimeError(
@@ -554,50 +779,76 @@ def filter_relevant(
         items = groups[key]
         if cache_obj is not None:
             hit = cache_obj.get(key)
-            if hit and hit.get("decision") in ("yes", "no") and not hit.get("error"):
+            if hit and hit.get("decision") in ("yes", "no") and not hit.get("error") and not hit.get("failed_open"):
                 return [
                     _decision_from_record(item["path"], {**hit, "cache_key": key}, cached=True)
                     for item in items
                 ]
         sample = items[0]
-        try:
-            raw, prompt_tokens, completion_tokens, total_tokens = _ask(
-                call=call_llm,
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                task=task,
-                paths=[item["path"] for item in items],
-                body=sample["body"],
-                note=sample["note"],
-                max_output_tokens=max_output_tokens,
-            )
-        except Exception as exc:
-            message = f"{type(exc).__name__}: {exc}"
+
+        def fail_open(message, raw=None, prompt_tokens=0, completion_tokens=0, total_tokens=0):
+            # Errors and empty answers are not cached. The next call tries again.
             return [
                 RelevanceDecision(
                     path=item["path"],
                     decision="yes",
                     reason=f"error; included by default: {message}",
-                    raw=None,
-                    tokens=0,
-                    cached=False,
+                    raw=raw,
+                    tokens=total_tokens,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cached=index > 0 and total_tokens > 0,
                     skipped_reason=item["skipped_reason"],
                     error=message,
+                    failed_open=True,
                     cache_key=key,
                 )
-                for item in items
+                for index, item in enumerate(items)
             ]
 
+        attempt = 0
+        while True:
+            try:
+                raw, prompt_tokens, completion_tokens, total_tokens = _ask(
+                    call=call_llm,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    task=task,
+                    paths=[item["path"] for item in items],
+                    body=sample["body"],
+                    note=sample["note"],
+                    max_output_tokens=output_budget,
+                    reasoning_effort=effort,
+                )
+                break
+            except Exception as exc:
+                if attempt >= max_attempts - 1 or not is_transient_error(exc):
+                    return fail_open(f"{type(exc).__name__}: {exc}")
+                sleep(retry_backoff * (2 ** attempt))
+                attempt += 1
+
         parsed, cleaned = parse_relevance_answer(raw)
+        # A reasoning model can consume the completion budget and leave no
+        # visible answer. That is a failed-open error, not an ambiguous yes.
+        if not (cleaned or "").strip():
+            return fail_open(
+                "empty answer",
+                raw=raw,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         if parsed is None:
             decision = "yes"
-            reason = cleaned or "ambiguous answer; included by default"
-            if cleaned:
-                reason = f"ambiguous answer; included by default: {cleaned}"
+            reason = f"ambiguous answer; included by default: {cleaned}"
+            error = None
+            store = False
         else:
             decision = parsed
             reason = cleaned
+            error = None
+            store = True
         record = {
             "decision": decision,
             "reason": reason,
@@ -606,10 +857,11 @@ def filter_relevant(
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "skipped_reason": sample["skipped_reason"],
-            "error": None,
+            "error": error,
+            "failed_open": False,
             "cache_key": key,
         }
-        if cache_obj is not None:
+        if store and cache_obj is not None:
             cache_obj.put(key, record)
         decisions = []
         for index, item in enumerate(items):
@@ -624,7 +876,8 @@ def filter_relevant(
                     completion_tokens=completion_tokens,
                     cached=index > 0,
                     skipped_reason=item["skipped_reason"],
-                    error=None,
+                    error=error,
+                    failed_open=False,
                     cache_key=key,
                 )
             )
@@ -652,8 +905,15 @@ def filter_relevant(
     return FilterRelevantResult(files=included, decisions=decisions, model=model)
 
 
-def _pending_item(path, original, body, note, skipped_reason, variant, task, model):
-    key = RelevanceCache.make_key(model, task, original, variant)
+def _pending_item(path, original, body, note, skipped_reason, variant, task, model, max_output_tokens):
+    key = RelevanceCache.make_key(
+        model,
+        task,
+        original,
+        variant,
+        max_output_tokens=max_output_tokens,
+        prompt_version=PROMPT_VERSION,
+    )
     return {
         "path": path,
         "body": body,
@@ -675,17 +935,19 @@ def format_filter_summary(result: FilterRelevantResult, verbose: bool = False) -
     """One-screen summary of a filter pass. Per-file lines when ``verbose``."""
     total = len(result.decisions)
     kept = len(result.files)
-    error_count = len(result.errors)
+    failed_open_count = len(result.failed_open)
     line = (
         f"Relevance filter ({result.model}): kept {kept}/{total} files, "
         f"{result.billed_tokens} tokens"
     )
-    if error_count:
-        line += f", {error_count} error{'s' if error_count != 1 else ''}"
+    if failed_open_count:
+        line += f", {failed_open_count} failed open"
     lines = [line]
     for decision in result.decisions:
-        if decision.error:
-            lines.append(f"  error {decision.path}: {decision.error} (included by default)")
+        if decision.error or decision.failed_open:
+            lines.append(
+                f"  failed open {decision.path}: {decision.error or decision.reason} (included by default)"
+            )
         elif verbose:
             flags = []
             if decision.cached:

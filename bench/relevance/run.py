@@ -90,11 +90,53 @@ def generate_diff_with_usage(files, task, model, api_key, base_url):
 
 
 def run_pipeline(files, task, diff_model, apply_model, api_key, base_url):
+    """Run generate_diff and smartapply.
+
+    A failure in either step is recorded on the returned dict. The other
+    pipeline, and this report, keep going.
+    """
     from patchling import smartapply
 
-    diff, usage = generate_diff_with_usage(files, task, diff_model, api_key, base_url)
-    applied = smartapply(diff, dict(files), model=apply_model, api_key=api_key, base_url=base_url)
-    return diff, usage, applied
+    empty_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    try:
+        diff, usage = generate_diff_with_usage(files, task, diff_model, api_key, base_url)
+    except Exception as exc:
+        return {
+            "diff": None,
+            "applied": None,
+            "usage": empty_usage,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    try:
+        applied = smartapply(diff, dict(files), model=apply_model, api_key=api_key, base_url=base_url)
+    except Exception as exc:
+        return {
+            "diff": diff,
+            "applied": None,
+            "usage": usage,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {"diff": diff, "applied": applied, "usage": usage, "error": None}
+
+
+def _as_pipeline(value):
+    """Accept the dict from ``run_pipeline`` or a legacy ``(diff, usage, applied)`` tuple."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        usage = value.get("usage") or {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        return {
+            "diff": value.get("diff"),
+            "applied": value.get("applied"),
+            "usage": usage,
+            "error": value.get("error"),
+        }
+    diff, usage, applied = value
+    return {"diff": diff, "applied": applied, "usage": usage, "error": None}
 
 
 def load_saved_decisions(path: str) -> list:
@@ -123,6 +165,17 @@ def filter_usage_from_decisions(decisions) -> dict:
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
 
 
+def _failed_open_count(decisions) -> int:
+    count = 0
+    for decision in decisions:
+        if isinstance(decision, dict):
+            if decision.get("failed_open"):
+                count += 1
+        elif getattr(decision, "failed_open", False):
+            count += 1
+    return count
+
+
 def yes_files(files: dict, decisions) -> dict:
     kept = {}
     for decision in decisions:
@@ -147,9 +200,10 @@ def build_report(
 ):
     """Assemble precision/recall, token, and cost figures.
 
-    ``diff_full`` / ``diff_filtered`` are optional ``(diff, usage, applied)``
-    tuples from the two pipelines. Applied maps are merged onto ``files``
-    before the quality comparison.
+    ``diff_full`` / ``diff_filtered`` are optional pipeline dicts (or legacy
+    ``(diff, usage, applied)`` tuples). Applied maps are merged onto ``files``
+    before the quality comparison. A pipeline that raised is stored with
+    ``error`` set; its diff and applied files are kept when that step succeeded.
     """
     score = metrics.score_decisions(decisions, relevant)
     kept = yes_files(files, decisions)
@@ -166,17 +220,27 @@ def build_report(
     output_tokens_included = False
     quality = None
 
-    if diff_full is not None and diff_filtered is not None:
-        full_diff, full_usage, full_applied = diff_full
-        filtered_diff, filtered_usage, filtered_applied = diff_filtered
-        full_diff_usage = full_usage
-        filtered_diff_usage = filtered_usage
-        output_tokens_included = True
-        merged_filtered = metrics.merge_applied(files, kept, filtered_applied)
-        merged_full = metrics.merge_applied(files, files, full_applied)
-        quality = metrics.compare_outcomes(
-            files, merged_full, merged_filtered, full_diff, filtered_diff
-        )
+    full_pipeline = _as_pipeline(diff_full)
+    filtered_pipeline = _as_pipeline(diff_filtered)
+    if full_pipeline is not None and filtered_pipeline is not None:
+        full_diff_usage = full_pipeline["usage"]
+        filtered_diff_usage = filtered_pipeline["usage"]
+        both_ok = full_pipeline["error"] is None and filtered_pipeline["error"] is None
+        output_tokens_included = both_ok
+        if (
+            both_ok
+            and full_pipeline["applied"] is not None
+            and filtered_pipeline["applied"] is not None
+        ):
+            merged_filtered = metrics.merge_applied(files, kept, filtered_pipeline["applied"])
+            merged_full = metrics.merge_applied(files, files, full_pipeline["applied"])
+            quality = metrics.compare_outcomes(
+                files,
+                merged_full,
+                merged_filtered,
+                full_pipeline["diff"],
+                filtered_pipeline["diff"],
+            )
 
     full_cost = metrics.pipeline_cost({"prompt_tokens": 0, "completion_tokens": 0}, full_diff_usage, prices)
     filtered_cost = metrics.pipeline_cost(filter_usage, filtered_diff_usage, prices)
@@ -210,7 +274,12 @@ def build_report(
             "comparison": comparison,
             "note": "Prices are the estimates passed on the command line, not a provider invoice.",
         },
+        "failed_open": _failed_open_count(decisions),
         "diff_quality": quality,
+        "pipelines": {
+            "full": full_pipeline,
+            "filtered": filtered_pipeline,
+        },
         "decisions": [
             decision if isinstance(decision, dict) else decision.to_dict() for decision in decisions
         ],
@@ -226,7 +295,10 @@ def format_report(report: dict) -> str:
         f"  repo: {report['repo']}",
         f"  task: {report['task']}",
         f"  filter model: {report['filter_model']}",
-        f"  files: {report['files_kept']} kept / {report['files_total']} seen",
+        (
+            f"  files: {report['files_kept']} kept / {report['files_total']} seen"
+            + (f", {report['failed_open']} failed open" if report.get("failed_open") else "")
+        ),
         (
             f"  precision: {score['precision']:.3f}  "
             f"recall: {score['recall']:.3f}  f1: {score['f1']:.3f}"
@@ -249,6 +321,13 @@ def format_report(report: dict) -> str:
         lines.append("  false negatives: " + ", ".join(score["false_negatives"]))
     if score["missing_labels"]:
         lines.append("  labels missing from the repo scan: " + ", ".join(score["missing_labels"]))
+    pipelines = report.get("pipelines") or {}
+    pipeline_errors = []
+    for label in ("full", "filtered"):
+        pipeline = pipelines.get(label)
+        if pipeline and pipeline.get("error"):
+            pipeline_errors.append(f"  {label} pipeline: {pipeline['error']}")
+    lines.extend(pipeline_errors)
     quality = report.get("diff_quality")
     if quality:
         lines.append(
@@ -259,6 +338,8 @@ def format_report(report: dict) -> str:
         )
         if quality["content_mismatches"]:
             lines.append("  apply mismatches: " + ", ".join(quality["content_mismatches"]))
+    elif pipeline_errors:
+        lines.append("  diff comparison: unavailable because a pipeline failed")
     elif report["tokens"]["output_tokens_included"] is False:
         lines.append("  diff comparison: skipped (cost above uses input-token estimates only)")
     return "\n".join(lines)
@@ -333,7 +414,7 @@ def main(argv=None) -> int:
         filter_model = result.model
         print(
             f"Filter kept {len(result.files)}/{len(files)} files "
-            f"({result.billed_tokens} billed tokens, {len(result.errors)} errors)."
+            f"({result.billed_tokens} billed tokens, {len(result.failed_open)} failed open)."
         )
 
     diff_full = diff_filtered = None
@@ -343,8 +424,12 @@ def main(argv=None) -> int:
         kept = yes_files(files, decisions)
         print(f"Running generate_diff + smartapply on all {len(files)} files...")
         diff_full = run_pipeline(files, args.task, diff_model, apply_model, api_key, base_url)
+        if diff_full.get("error"):
+            print(f"Full pipeline failed: {diff_full['error']}", file=sys.stderr)
         print(f"Running generate_diff + smartapply on {len(kept)} relevant files...")
         diff_filtered = run_pipeline(kept, args.task, diff_model, apply_model, api_key, base_url)
+        if diff_filtered.get("error"):
+            print(f"Filtered pipeline failed: {diff_filtered['error']}", file=sys.stderr)
 
     prices = {
         "filter_input": args.filter_input_price,

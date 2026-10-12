@@ -273,6 +273,7 @@ def call_llm(
     max_tokens: int | None,
     temperature: float,
     budget_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> Any:
     # Check if we're using Anthropic
     if "api.anthropic.com" in base_url:
@@ -365,12 +366,21 @@ def call_llm(
     else:
         # Use OpenAI client as before
         client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
-        return client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
+        request = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        # Relevance checks set this so a reasoning model does not spend the
+        # whole completion budget on hidden reasoning and return an empty answer.
+        if reasoning_effort:
+            request["reasoning_effort"] = reasoning_effort
+        try:
+            return client.chat.completions.create(**request)
+        except TypeError:
+            request.pop("reasoning_effort", None)
+            return client.chat.completions.create(**request)
 
 def call_llm_for_diff(
     system_prompt: str,
@@ -515,6 +525,7 @@ def build_environment(
     max_tokens=_FILTER_LIMIT_UNSET,
     on_oversize: str = "truncate",
     on_binary: str = "exclude",
+    skip_patterns=None,
 ) -> str:
     """Rebuild environment string from file dictionary.
 
@@ -525,7 +536,8 @@ def build_environment(
     existing ``build_environment(files)`` callers working.
 
     ``max_bytes=None`` / ``max_tokens=None`` disable that limit. Omit them to
-    use the filter's defaults.
+    use the filter's defaults. ``skip_patterns=()`` sends lockfiles and
+    generated files; omit it to skip those by default.
     """
     if filter_relevant:
         if not task:
@@ -541,6 +553,8 @@ def build_environment(
             on_oversize=on_oversize,
             on_binary=on_binary,
         )
+        if skip_patterns is not None:
+            options["skip_patterns"] = skip_patterns
         if max_bytes is not _FILTER_LIMIT_UNSET:
             options["max_bytes"] = max_bytes
         if max_tokens is not _FILTER_LIMIT_UNSET:
@@ -800,7 +814,7 @@ def parse_arguments():
         help='Ask a cheap model which files are relevant to the prompt, and send only the yes files to generate the diff.')
     parser.add_argument(
         '--filter-model', type=str, default=None,
-        help='Model for --filter-relevant (default: $GPTDIFF_FILTER_MODEL or gemini-2.0-flash).')
+        help='Model for --filter-relevant (default: $GPTDIFF_FILTER_MODEL or xiaomi/mimo-v2.6-flash).')
     parser.add_argument(
         '--filter-concurrency', type=int, default=8,
         help='Maximum number of relevance checks to run at once (default: 8).')
@@ -822,6 +836,12 @@ def parse_arguments():
     parser.add_argument(
         '--filter-decisions', type=str, default=None,
         help='Write per-file relevance decisions (path, decision, reason, tokens, cached, skipped_reason) as JSON.')
+    parser.add_argument(
+        '--filter-skip-pattern', action='append', default=None,
+        help='Additional glob to skip before the relevance check (lockfiles and minified files are skipped by default).')
+    parser.add_argument(
+        '--filter-no-skip-generated', action='store_true',
+        help='Do not skip lockfiles and generated files (uv.lock, package-lock.json, yarn.lock, poetry.lock, *.min.js, and similar).')
     # Optional flags such as --apply may appear before, between, or after
     # file paths. parse_args treats everything after the first positional
     # file as more files, so `--apply` at the end was a filename.
@@ -1133,9 +1153,16 @@ def _apply_relevance_filter(project_files, task, args):
         cache=args.filter_cache,
         on_oversize=args.filter_oversize,
         on_binary=args.filter_binary,
-        api_key=os.getenv("GPTDIFF_LLM_API_KEY"),
-        base_url=os.getenv("GPTDIFF_LLM_BASE_URL", "https://nano-gpt.com/api/v1/"),
     )
+    # Credentials go through resolve_api_key / resolve_base_url so set_env
+    # overrides and the process environment are both honored.
+    extra_patterns = list(getattr(args, "filter_skip_pattern", None) or [])
+    if getattr(args, "filter_no_skip_generated", False):
+        options["skip_patterns"] = extra_patterns
+    elif extra_patterns:
+        from .relevance import DEFAULT_SKIP_PATTERNS
+
+        options["skip_patterns"] = list(DEFAULT_SKIP_PATTERNS) + extra_patterns
     # Omitting the flag uses the library default. 0 disables that limit.
     if args.filter_max_bytes is not None:
         options["max_bytes"] = None if args.filter_max_bytes <= 0 else args.filter_max_bytes
