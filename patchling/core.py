@@ -744,7 +744,13 @@ def parse_arguments():
     parser.add_argument('--nowarn', action='store_true', help='Disable large token warning')
     parser.add_argument('--anthropic_budget_tokens', type=int, default=None, help='Budget tokens for Anthropic extended thinking')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output with detailed information')
-    return parser.parse_args()
+    # Optional flags such as --apply may appear before, between, or after
+    # file paths. parse_args treats everything after the first positional
+    # file as more files, so `--apply` at the end was a filename.
+    parse_fn = parser.parse_args
+    if hasattr(parser, "parse_intermixed_args"):
+        parse_fn = parser.parse_intermixed_args
+    return parse_fn()
 
 def absolute_to_relative(absolute_path):
     cwd = os.getcwd()
