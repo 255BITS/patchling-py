@@ -17,7 +17,8 @@
       { "text": "e\u0301", "tokens": 1 },
       { "text": "é", "tokens": 1 },
       { "text": "€", "tokens": 1 },
-      { "text": "😀", "tokens": 1 }
+      { "text": "😀", "tokens": 1 },
+      { "text": "\uFEFFhello", "tokens": 2 }
     ]
   },
   "tokenTruncation": [
@@ -26,7 +27,8 @@
     { "text": "e\u0301XYZ", "maxTokens": 1, "expected": "e\u0301XY" },
     { "text": "é", "maxTokens": 1, "expected": "é" },
     { "text": "€", "maxTokens": 1, "expected": "€" },
-    { "text": "😀", "maxTokens": 1, "expected": "😀" }
+    { "text": "😀", "maxTokens": 1, "expected": "😀" },
+    { "text": "\uFEFFhello", "maxTokens": 1, "expected": "\uFEFFhel" }
   ],
   "systemPrompt": "You are a relevance filter for a code-editing task. Decide whether the given file must be read or edited to accomplish the task, or is necessary context for that edit. Reply with a single line that starts with exactly \"yes\" or exactly \"no\", followed by a short reason. Answer \"yes\" when the file is likely to need changes or is required context. Answer \"no\" when it is unrelated. Do not write a diff.",
   "userPrompt": {
@@ -109,6 +111,18 @@
         "note": "Note: truncated",
         "content": "abc",
         "sha256": "accdc713f73c3b5e334ed3d0cd502e18569b921a5a549dadc92c53623878b824"
+      },
+      {
+        "prompt_version": "3",
+        "model": "m",
+        "max_output_tokens": "1024",
+        "effort_sent": "low",
+        "task": "edit",
+        "path": "bom.txt",
+        "mode": "full",
+        "note": "",
+        "content": "\uFEFFhello",
+        "sha256": "10ab643166b5e542fd46b7b0e78b3036438a5359de21a1e8ceaf2c28e586f6c9"
       }
     ]
   },
@@ -121,6 +135,9 @@
     { "raw": "\"yes\"", "decision": "yes" },
     { "raw": "'no'", "decision": "no" },
     { "raw": "**yes**", "decision": "yes" },
+    { "raw": "**no** unrelated", "decision": "no" },
+    { "raw": "\"no\" unrelated", "decision": "no" },
+    { "raw": "\u201cno\u201d \u2014 unrelated", "decision": "no" },
     { "raw": "`no`", "decision": "no" },
     { "raw": "Answer: **yes**", "decision": "yes" },
     { "raw": "yes!", "decision": "yes" },
@@ -152,15 +169,24 @@
   },
   "binary": {
     "sampleBytes": 8192,
-    "rule": "Decode the first 8192 bytes as UTF-8. Tolerate only an incomplete trailing sequence of at most 3 bytes. A NUL or any other invalid byte is binary. A non-empty buffer that decodes to empty text is binary.",
+    "rule": "Validate the whole payload as UTF-8. An incomplete trailing sequence is tolerated only when it ends on the 8192-byte probe boundary. A NUL or any other invalid byte anywhere is binary. A non-empty buffer that decodes to empty text is binary. Included binary files keep their original bytes.",
     "cases": [
       { "name": "2-byte cut", "pad": 8191, "tail": [195], "binary": false },
       { "name": "3-byte cut", "pad": 8190, "tail": [226, 130], "binary": false },
       { "name": "4-byte cut", "pad": 8189, "tail": [240, 159, 152], "binary": false },
       { "name": "invalid lead", "pad": 8191, "tail": [255], "binary": true },
       { "name": "nul", "pad": 0, "tail": [104, 105, 0], "binary": true },
-      { "name": "incomplete only", "pad": 0, "tail": [195], "binary": true }
+      { "name": "incomplete only", "pad": 0, "tail": [195], "binary": true },
+      { "name": "8192 ASCII + 0xff + TAIL", "pad": 8192, "tail": [255, 84, 65, 73, 76], "binary": true }
     ]
+  },
+  "bom": {
+    "rule": "A leading UTF-8 BOM (U+FEFF) is preserved in decoded text. It is one code point for token estimates and truncation, and it is part of the cache key. Do not strip it.",
+    "text": "\uFEFFhello",
+    "bytes": [239, 187, 191, 104, 101, 108, 108, 111],
+    "tokens": 2,
+    "maxTokens": 1,
+    "truncated": "\uFEFFhel"
   },
   "ignore": {
     "caseSensitive": false,

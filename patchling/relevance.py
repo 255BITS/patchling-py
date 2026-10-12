@@ -7,14 +7,18 @@ to the task. Only ``yes`` files are returned for ``generate_diff`` and
 
 Prompt version 3. Each request uses 1024 output tokens and
 ``reasoning_effort="low"`` (one retry without that parameter on a 4xx that
-names it). The cache key is the SHA-256 of length-prefixed fields: prompt
-version, model, token limit, the effort actually sent (``low``, or empty when
-the retry omitted it), task, path, mode (``full``, ``truncated``, or
-``binary``), the preview note, and the exact body sent. A decision is a
-leading standalone yes/no after the supported wrappers. Anything else is
-malformed: the file is included, ``failed_open`` is set, and the decision is
-not cached. A cache read error is a miss and the model is called; a cache
-write error is logged and does not abort the run.
+names it, or when the OpenAI client rejects the keyword). The cache key is
+the SHA-256 of length-prefixed fields: prompt version, model, token limit,
+the effort actually sent (``low``, or empty when the retry omitted it), task,
+path, mode (``full``, ``truncated``, or ``binary``), the preview note, and
+the exact body sent. A decision is a leading standalone yes/no after the
+supported wrappers, including a quoted decision followed by a reason.
+Anything else is malformed: the file is included, ``failed_open`` is set, and
+the decision is not cached. Non-string message content is that same failure.
+A cache read error is a miss and the model is called; a cache write error is
+logged and does not abort the run. Invalid UTF-8 anywhere in a byte payload
+is binary. ``on_binary="include"`` returns those original bytes unchanged.
+A leading UTF-8 BOM (U+FEFF) stays in decoded text.
 """
 
 from __future__ import annotations
@@ -625,24 +629,45 @@ def _utf8_text_or_none(sample: bytes) -> Optional[str]:
 
 
 def is_binary_content(content) -> bool:
-    """True when the first 8192 bytes are not text.
+    """True when the payload is not text.
 
-    A multibyte character cut by that window is still text. A NUL or any
-    genuinely invalid byte is binary. A non-empty buffer that decodes to
-    empty text (only an incomplete UTF-8 sequence) is binary.
+    The first 8192 bytes are decoded as UTF-8. An incomplete sequence of at
+    most 3 bytes at that probe boundary is still text. A NUL or any other
+    invalid byte inside the window is binary, and so is a non-empty window
+    that decodes to empty text. Bytes past the window are checked too: any
+    invalid UTF-8 there is binary. A leading BOM is text.
     """
     if isinstance(content, str):
-        sample = content.encode("utf-8")[:8192]
+        if "\x00" in content:
+            return True
+        raw = content.encode("utf-8")
     elif isinstance(content, (bytes, bytearray)):
-        sample = bytes(content[:8192])
+        raw = bytes(content)
     else:
         return False
-    text = _utf8_text_or_none(sample)
+    return _bytes_are_binary(raw)
+
+
+def _bytes_are_binary(raw: bytes) -> bool:
+    if b"\x00" in raw:
+        return True
+    window = raw[:8192]
+    text = _utf8_text_or_none(window)
     if text is None:
         return True
-    if sample and text == "":
+    if window and text == "":
         return True
-    return _text_looks_binary(text)
+    if _text_looks_binary(text):
+        return True
+    if len(raw) <= 8192:
+        return False
+    # The probe may end inside a character. The rest of the file has to be
+    # well-formed UTF-8; an invalid byte after the window is not dropped.
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
 
 
 def _text_looks_binary(sample: str) -> bool:
@@ -666,23 +691,39 @@ def _coerce_text(content) -> str:
     raise TypeError(f"file content must be str or bytes, got {type(content).__name__}")
 
 
+def _decode_utf8_text(raw: bytes) -> Optional[str]:
+    """Decode UTF-8, keeping a leading BOM (U+FEFF).
+
+    ``utf-8-sig`` is not used. A buffer of at most 8192 bytes may end on an
+    incomplete sequence; those trailing bytes are dropped. A longer buffer
+    must be entirely well-formed, so a bad byte after the probe is not cut off.
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        if len(raw) > 8192:
+            return None
+        return _utf8_text_or_none(raw)
+
+
 def _prepare_content(content) -> tuple[bool, str]:
     """Return ``(is_binary, text)``.
 
-    Valid UTF-8 bytes are decoded to text and are never replaced with an
-    empty string. Invalid UTF-8 or a NUL byte takes the binary path.
+    Valid UTF-8 bytes are decoded to text, including a leading U+FEFF, and
+    are never replaced with an empty string. Invalid UTF-8 anywhere, or a
+    NUL byte, takes the binary path. Callers that include a binary file pass
+    the original bytes through instead of this text.
     """
     if isinstance(content, str):
         return is_binary_content(content), content
     if isinstance(content, (bytes, bytearray)):
         raw = bytes(content)
-        if b"\x00" in raw:
+        if is_binary_content(raw):
             return True, ""
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
+        text = _decode_utf8_text(raw)
+        if text is None or (raw and text == ""):
             return True, ""
-        return _text_looks_binary(text), text
+        return False, text
     raise TypeError(f"file content must be str or bytes, got {type(content).__name__}")
 
 
@@ -709,6 +750,11 @@ def _usage_triplet(usage) -> tuple[int, int, int]:
 
 
 def _content_text(content):
+    """Message content must already be a string.
+
+    A list such as ``['no']`` is not joined or passed through ``str``. That
+    would become the cacheable word ``no``. Non-string content fails open.
+    """
     if content is None:
         return ""
     if not isinstance(content, str):
@@ -878,6 +924,13 @@ def _ask(
         else:
             raise
     raw, prompt_tokens, completion_tokens, total_tokens = _usage_and_text(response)
+    # call_llm swallows a legacy SDK TypeError and retries with no effort.
+    # That response records effort "" so the decision is not stored as "low".
+    from .core import effort_sent_for
+
+    recorded = effort_sent_for(response)
+    if recorded is not None:
+        sent_effort = recorded or None
     return raw, prompt_tokens, completion_tokens, total_tokens, sent_effort
 
 
@@ -918,11 +971,15 @@ def filter_relevant(
     the empty effort. Empty answers, malformed answers, and errors are not
     cached. A cache read error is a miss and the model is called; a cache
     write error is logged and ignored. A response with missing choices, an
-    empty choice list, a missing message, or a non-JSON body fails that file
-    open and is not cached.
+    empty choice list, a missing message, non-string message content, or a
+    non-JSON body fails that file open and is not cached. When the default
+    client retries without ``reasoning_effort``, the decision is stored under
+    the empty effort.
 
     Binary files and files over ``max_bytes`` / ``max_tokens`` are not sent in
-    full. ``on_binary`` and ``on_oversize`` are ``include`` (keep, no model
+    full. Invalid UTF-8 after the first 8192 bytes is still binary.
+    ``on_binary="include"`` keeps the original bytes. ``on_binary`` and
+    ``on_oversize`` are ``include`` (keep, no model
     call), ``exclude`` (drop, no model call), or ``truncate`` (ask the model
     about a truncated or redacted preview). Pass ``None`` for ``max_bytes`` or
     ``max_tokens`` to disable that limit. ``skip_patterns`` defaults to
@@ -960,6 +1017,9 @@ def filter_relevant(
 
     by_path: dict[str, RelevanceDecision] = {}
     text_by_path: dict[str, str] = {}
+    # Binary includes keep the caller's object. Decoding would replace or drop
+    # the invalid byte and the bytes that follow it.
+    binary_original: dict = {}
     # Group files that share a cache key so each distinct body is sent once.
     groups: dict[str, list] = {}
     group_order: list[str] = []
@@ -976,6 +1036,8 @@ def filter_relevant(
         binary, text = _prepare_content(content)
         if not binary:
             text_by_path[path] = text
+        else:
+            binary_original[path] = content
         if binary:
             if on_binary == "truncate":
                 note = (
@@ -1215,7 +1277,9 @@ def filter_relevant(
     for path, content in files.items():
         decision = by_path[path]
         if decision.decision == "yes":
-            if path in text_by_path:
+            if path in binary_original:
+                included[path] = binary_original[path]
+            elif path in text_by_path:
                 included[path] = text_by_path[path]
             elif isinstance(content, str):
                 included[path] = content
