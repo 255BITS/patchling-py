@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 import subprocess
 import hashlib
@@ -32,6 +35,7 @@ from .applydiff import (
     llm_output_respects_diff,
     output_collapsed,
 )
+from .env import DEFAULT_BASE_URL, DEFAULT_MODEL, get_env
 
 VERBOSE = False
 diff_context = contextvars.ContextVar('diffcontent', default=[])
@@ -159,7 +163,7 @@ def list_files_and_dirs(path, ignore_list=None):
     return result
 
 # Function to load project files considering .gitignore
-def load_project_files(project_dir, cwd): 
+def load_project_files(project_dir: str | Path, cwd: str | Path) -> list[tuple[str, str]]: 
     """Load project files while respecting .gitignore and .gptignore rules.
     
     Recursively scans directories, skipping:
@@ -246,7 +250,30 @@ def _convert_openai_message_to_anthropic(message):
     return {**message, "content": converted_content}
 
 
-def call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+def resolve_api_key(api_key: str | None = None) -> str | None:
+    """Prefer an explicit key, then ``GPTDIFF_LLM_API_KEY``."""
+    return api_key or get_env("GPTDIFF_LLM_API_KEY")
+
+
+def resolve_base_url(base_url: str | None = None) -> str:
+    """Prefer an explicit URL, then ``GPTDIFF_LLM_BASE_URL``, then ``DEFAULT_BASE_URL``."""
+    return base_url or get_env("GPTDIFF_LLM_BASE_URL", DEFAULT_BASE_URL) or DEFAULT_BASE_URL
+
+
+def resolve_model(model: str | None = None) -> str:
+    """Prefer an explicit model, then ``GPTDIFF_MODEL``, then ``DEFAULT_MODEL``."""
+    return model or get_env("GPTDIFF_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+
+
+def call_llm(
+    api_key: str | None,
+    base_url: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    max_tokens: int | None,
+    temperature: float,
+    budget_tokens: int | None = None,
+) -> Any:
     # Check if we're using Anthropic
     if "api.anthropic.com" in base_url:
         anthropic_url = "https://api.anthropic.com/v1/messages"
@@ -345,7 +372,18 @@ def call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget
             temperature=temperature
         )
 
-def call_llm_for_diff(system_prompt, user_prompt, files_content, model, temperature=1.0, max_tokens=30000, api_key=None, base_url=None, budget_tokens=None, images=None):
+def call_llm_for_diff(
+    system_prompt: str,
+    user_prompt: str,
+    files_content: str,
+    model: str,
+    temperature: float = 1.0,
+    max_tokens: int = 30000,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    budget_tokens: int | None = None,
+    images: list[dict[str, str]] | None = None,
+) -> tuple[str, str, int, int, int]:
     enc = tiktoken.get_encoding("o200k_base")
     
     # Use colors in print statements
@@ -400,11 +438,8 @@ You must include the '--- file' and/or '+++ file' part of the diff. File modific
     else:
         print(f"Generating diff using model '{green}{model}{reset}' from '{blue}{domain_for_url(base_url)}{reset}' with {token_count} input tokens...")
 
-    if not api_key:
-        api_key = os.getenv('GPTDIFF_LLM_API_KEY')
-    if not base_url:
-        base_url = os.getenv('GPTDIFF_LLM_BASE_URL', "https://nano-gpt.com/api/v1/")
-    base_url = base_url or "https://nano-gpt.com/api/v1/"
+    api_key = resolve_api_key(api_key)
+    base_url = resolve_base_url(base_url)
 
     response = call_llm(
         api_key=api_key,
@@ -462,7 +497,7 @@ You must include the '--- file' and/or '+++ file' part of the diff. File modific
     return full_response, "\n".join(diff_response), prompt_tokens, completion_tokens, total_tokens
 
 # New API functions
-def build_environment(files_dict):
+def build_environment(files_dict: dict[str, str]) -> str:
     """Rebuild environment string from file dictionary"""
     env = []
     for path, content in files_dict.items():
@@ -481,17 +516,28 @@ def load_images(image_paths):
         images.append({"media_type": media_type, "data": encoded, "path": image_path})
     return images
 
-def generate_diff(environment, goal, model=None, temperature=1.0, max_tokens=32000, api_key=None, base_url=None, prepend=None, anthropic_budget_tokens=None, images=None):
+def generate_diff(
+    environment: str,
+    goal: str,
+    model: str | None = None,
+    temperature: float = 1.0,
+    max_tokens: int = 32000,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    prepend: str | None = None,
+    anthropic_budget_tokens: int | str | None = None,
+    images: list[str] | None = None,
+) -> str:
     """API: Generate a git diff from the environment and goal.
 
 If 'prepend' is provided, it should be a path to a file whose content will be
 prepended to the system prompt.
     """
     if model is None:
-        model = os.getenv('GPTDIFF_MODEL', 'deepseek-reasoner')
+        model = resolve_model(None)
         # Use ANTHROPIC_BUDGET_TOKENS env var if set and no cli override provided
         if anthropic_budget_tokens is None:
-            anthropic_budget_tokens = os.getenv('ANTHROPIC_BUDGET_TOKENS')
+            anthropic_budget_tokens = get_env("ANTHROPIC_BUDGET_TOKENS")
     
     if prepend:
         if prepend.startswith("http://") or prepend.startswith("https://"):
@@ -548,7 +594,14 @@ def sized_max_tokens(original_content, file_diff):
     return max(256, file_tokens + diff_tokens + 128)
 
 
-def smartapply(diff_text, files, model=None, api_key=None, base_url=None, max_tokens=None):
+def smartapply(
+    diff_text: str,
+    files: dict[str, str],
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, str]:
     """Applies unified diffs to file contents with AI-powered conflict resolution.
     
     Key features:
@@ -592,7 +645,7 @@ def smartapply(diff_text, files, model=None, api_key=None, base_url=None, max_to
             pass
     """
     if model is None:
-        model = os.getenv('GPTDIFF_MODEL', 'deepseek-reasoner')
+        model = resolve_model(None)
     parsed_diffs = parse_diff_per_file(diff_text)    
     print("-" * 40)
     print("SMARTAPPLY")
@@ -731,7 +784,16 @@ def call_llm_for_apply_with_think_tool_available(file_path, original_content, fi
 
     return notool_response
 
-def call_llm_for_apply(file_path, original_content, file_diff, model, api_key=None, base_url=None, extra_prompt=None, max_tokens=None):
+def call_llm_for_apply(
+    file_path: str,
+    original_content: str,
+    file_diff: str,
+    model: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    extra_prompt: str | None = None,
+    max_tokens: int | None = None,
+) -> str:
     """AI-powered diff application with conflict resolution.
     
     Internal workhorse for smartapply that handles individual file patches.
@@ -788,10 +850,8 @@ Diff to apply:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    if not api_key:
-        api_key = os.getenv('GPTDIFF_LLM_API_KEY')
-    if not base_url:
-        base_url = os.getenv('GPTDIFF_LLM_BASE_URL', "https://nano-gpt.com/api/v1/")
+    api_key = resolve_api_key(api_key)
+    base_url = resolve_base_url(base_url)
     if max_tokens is None:
         max_tokens = sized_max_tokens(original_content, file_diff)
     client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
@@ -879,23 +939,23 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args):
         if hasattr(args, "applymodel") and args.applymodel:
             model = args.applymodel
         else:
-            smart_apply_model = os.getenv("GPTDIFF_SMARTAPPLY_MODEL", "").strip()
+            smart_apply_model = (get_env("GPTDIFF_SMARTAPPLY_MODEL") or "").strip()
             if smart_apply_model:
                 model = smart_apply_model
             else:
                 model = 'openai/gpt-4.1-mini'
 
-        smart_api_key = os.getenv("GPTDIFF_SMARTAPPLY_API_KEY")
+        smart_api_key = get_env("GPTDIFF_SMARTAPPLY_API_KEY")
         if smart_api_key and smart_api_key.strip():
             api_key = smart_api_key
         else:
-            api_key = os.getenv("GPTDIFF_LLM_API_KEY")
+            api_key = get_env("GPTDIFF_LLM_API_KEY")
 
-        smart_base_url = os.getenv("GPTDIFF_SMARTAPPLY_BASE_URL")
+        smart_base_url = get_env("GPTDIFF_SMARTAPPLY_BASE_URL")
         if smart_base_url and smart_base_url.strip():
             base_url = smart_base_url
         else:
-            base_url = os.getenv("GPTDIFF_LLM_BASE_URL", "https://nano-gpt.com/api/v1/")
+            base_url = resolve_base_url(None)
 
         print(f"Running smartapply in parallel for '{file_path}' using model '{green}{model}{reset}' from '{blue}{domain_for_url(base_url)}{reset}'...")
         try:
@@ -941,7 +1001,7 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args):
     if args.beep:
         print("\a")
 
-def save_files(files_dict, target_directory):
+def save_files(files_dict: dict[str, str], target_directory: str | Path) -> None:
     """
     Save files from a dictionary mapping relative file paths to file contents
     into the specified target directory.
@@ -1036,7 +1096,7 @@ def main():
     full_prompt = f"{system_prompt}\n\n{user_prompt}\n\n{files_content}"
     token_count = len(enc.encode(full_prompt))
     if args.model is None:
-        args.model = os.getenv('GPTDIFF_MODEL', 'deepseek-reasoner')
+        args.model = resolve_model(None)
 
     if not args.call and not args.apply:
         """
@@ -1091,7 +1151,7 @@ def main():
         exit(0)
     else:
         # Validate API key presence before any API operations
-        if not os.getenv('GPTDIFF_LLM_API_KEY'):
+        if not get_env("GPTDIFF_LLM_API_KEY"):
             print("\033[1;31mError: GPTDIFF_LLM_API_KEY environment variable required\033[0m")
             print("Set it with: export GPTDIFF_LLM_API_KEY='your-key'")
             sys.exit(1)
@@ -1106,8 +1166,8 @@ def main():
         generate_max_tokens = args.max_tokens if args.max_tokens is not None else 30000
         full_text, diff_text, prompt_tokens, completion_tokens, total_tokens = call_llm_for_diff(system_prompt, user_prompt, files_content, args.model,
                                                                                                 temperature=args.temperature,
-                                                                                                api_key=os.getenv('GPTDIFF_LLM_API_KEY'),
-                                                                                                base_url=os.getenv('GPTDIFF_LLM_BASE_URL', "https://nano-gpt.com/api/v1/"),
+                                                                                                api_key=resolve_api_key(None),
+                                                                                                base_url=resolve_base_url(None),
                                                                                                 max_tokens=generate_max_tokens,
                                                                                                 budget_tokens=args.anthropic_budget_tokens,
                                                                                                 images=encoded_images
@@ -1146,7 +1206,7 @@ def main():
     else:
         print(f"API Usage: {total_tokens} tokens, Model used: {green}{args.model}{reset}")
 
-def swallow_reasoning(full_response: str) -> (str, str):
+def swallow_reasoning(full_response: str) -> tuple[str, str]:
     """
     Extracts and swallows the chain-of-thought reasoning section from the full LLM response.
     Assumes the reasoning block starts with a line beginning with "> Reasoning"
@@ -1172,6 +1232,21 @@ def swallow_reasoning(full_response: str) -> (str, str):
     final_content = re.sub(pattern, replacer, full_response)
     reasoning = "\n".join(reasoning_list)
     return final_content.strip(), reasoning
+
+def strip_think_tags(response: str) -> str:
+    """Remove reasoning and ``<think>`` blocks from an LLM response.
+
+    Mirrors ``stripThinkTags`` in the JS package: swallow ``> Reasoning``
+    blocks, drop closed ``<think>...</think>`` regions, and drop a dangling
+    unclosed ``<think>`` so chain-of-thought is not written into a file.
+    """
+    if not response:
+        return ""
+    without_reasoning, _reasoning = swallow_reasoning(response)
+    without_think = re.sub(r"<think>[\s\S]*?</think>", "", without_reasoning)
+    without_think = re.sub(r"<think>[\s\S]*$", "", without_think)
+    return without_think.strip()
+
 
 def strip_bad_output(updated: str, original: str) -> str:
     """

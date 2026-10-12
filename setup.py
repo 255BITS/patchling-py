@@ -14,7 +14,7 @@ setup(
     },
     keywords=['patchling', 'smartapply', 'llm', 'diff', 'unified-diff', 'patch', 'code-transformation', 'ai', 'codegen', 'gptdiff'],
     packages=find_packages(),  # Use find_packages() to automatically discover packages
-    package_data={'patchling': []},  # Add any package data if needed
+    package_data={'patchling': ['py.typed']},
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
     install_requires=[
