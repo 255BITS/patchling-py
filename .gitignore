@@ -2,6 +2,7 @@
 build
 .pytest_cache
 gptdiff.egg-info
+*.egg-info
 *.pyc
 .jekyll-cache
 _site

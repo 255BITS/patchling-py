@@ -23,7 +23,10 @@ from .core import (
 )
 from .env import DEFAULT_BASE_URL, DEFAULT_MODEL, get_env, set_env
 
+__version__ = "0.8.1"
+
 __all__ = [
+    "__version__",
     "DEFAULT_BASE_URL",
     "DEFAULT_MODEL",
     "SmartApplyError",
