@@ -184,6 +184,46 @@ set_env("GPTDIFF_MODEL", None)  # fall back to the process environment, then DEF
 
 `extract_diff_blocks` returns every fence whose language is exactly `diff`, including when the fence is surrounded by prose. Text with no `diff` fence is left for `parse_diff_per_file` to read as a raw diff.
 
+### filter_relevant
+
+```python
+def filter_relevant(
+    files: Dict[str, str],
+    task: str,
+    model: str = None,          # $GPTDIFF_FILTER_MODEL or gemini-2.0-flash
+    concurrency: int = 8,
+    cache=None,                 # RelevanceCache, path, None, or False
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    max_bytes: Optional[int] = 200_000,
+    max_tokens: Optional[int] = 12_000,
+    on_oversize: str = "truncate",  # include, exclude, or truncate
+    on_binary: str = "exclude",     # include, exclude, or truncate
+) -> FilterRelevantResult
+```
+
+Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`.
+
+`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, or `truncated`), and `error` when that file's call failed.
+
+- Checks run with bounded `concurrency`.
+- `cache` is in-memory for the call. Pass a `RelevanceCache` to reuse it, or a filesystem path to persist it. The key is the model, a hash of the task, a hash of the file contents, and a truncation tag.
+- Binary files and files over the size or token threshold are not sent in full. `include` keeps them without a call, `exclude` drops them, `truncate` asks about a truncated or redacted preview. A `yes` on a truncated file still forwards the original contents.
+- Think tags are stripped before the answer is read. An ambiguous answer or an error includes the file and records why, so a confused model cannot drop a file you needed.
+
+```python
+from patchling import filter_relevant, generate_diff, smartapply, build_environment
+
+result = filter_relevant(files, "Rename add() to sum_numbers()")
+for decision in result.decisions:
+    print(decision.path, decision.decision, decision.skipped_reason or decision.error or "")
+
+diff = generate_diff(build_environment(result.files), "Rename add() to sum_numbers()")
+updated = smartapply(diff, result.files)
+```
+
+`build_environment(..., filter_relevant=True, task=...)` runs the same filter before serializing. Pass a `decisions` list to collect the records. The CLI flag is `--filter-relevant`.
+
 ## Authentication & Configuration
 ```python
 # Option 1: process environment

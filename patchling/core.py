@@ -497,8 +497,59 @@ You must include the '--- file' and/or '+++ file' part of the diff. File modific
     return full_response, "\n".join(diff_response), prompt_tokens, completion_tokens, total_tokens
 
 # New API functions
-def build_environment(files_dict: dict[str, str]) -> str:
-    """Rebuild environment string from file dictionary"""
+_FILTER_LIMIT_UNSET = object()
+
+
+def build_environment(
+    files_dict: dict[str, str],
+    *,
+    filter_relevant: bool = False,
+    task: str | None = None,
+    filter_model: str | None = None,
+    concurrency: int = 8,
+    cache=None,
+    decisions: list | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    max_bytes=_FILTER_LIMIT_UNSET,
+    max_tokens=_FILTER_LIMIT_UNSET,
+    on_oversize: str = "truncate",
+    on_binary: str = "exclude",
+) -> str:
+    """Rebuild environment string from file dictionary.
+
+    Pass ``filter_relevant=True`` with ``task`` to drop files a cheap model
+    marks irrelevant before the environment is serialized (the same opt-in as
+    the ``--filter-relevant`` CLI flag). ``decisions``, when a list, receives
+    one relevance decision per input file. Keyword-only arguments keep
+    existing ``build_environment(files)`` callers working.
+
+    ``max_bytes=None`` / ``max_tokens=None`` disable that limit. Omit them to
+    use the filter's defaults.
+    """
+    if filter_relevant:
+        if not task:
+            raise ValueError("task is required when filter_relevant=True")
+        from .relevance import filter_relevant as _filter_relevant
+
+        options = dict(
+            model=filter_model,
+            concurrency=concurrency,
+            cache=cache,
+            api_key=api_key,
+            base_url=base_url,
+            on_oversize=on_oversize,
+            on_binary=on_binary,
+        )
+        if max_bytes is not _FILTER_LIMIT_UNSET:
+            options["max_bytes"] = max_bytes
+        if max_tokens is not _FILTER_LIMIT_UNSET:
+            options["max_tokens"] = max_tokens
+        result = _filter_relevant(files_dict, task, **options)
+        if decisions is not None:
+            decisions.extend(result.decisions)
+        files_dict = result.files
+
     env = []
     for path, content in files_dict.items():
         env.append(f"File: {path}")
@@ -744,6 +795,33 @@ def parse_arguments():
     parser.add_argument('--nowarn', action='store_true', help='Disable large token warning')
     parser.add_argument('--anthropic_budget_tokens', type=int, default=None, help='Budget tokens for Anthropic extended thinking')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output with detailed information')
+    parser.add_argument(
+        '--filter-relevant', action='store_true',
+        help='Ask a cheap model which files are relevant to the prompt, and send only the yes files to generate the diff.')
+    parser.add_argument(
+        '--filter-model', type=str, default=None,
+        help='Model for --filter-relevant (default: $GPTDIFF_FILTER_MODEL or gemini-2.0-flash).')
+    parser.add_argument(
+        '--filter-concurrency', type=int, default=8,
+        help='Maximum number of relevance checks to run at once (default: 8).')
+    parser.add_argument(
+        '--filter-cache', type=str, default=None,
+        help='On-disk JSON cache for relevance decisions, keyed by model, task hash, and file hash.')
+    parser.add_argument(
+        '--filter-max-bytes', type=int, default=None,
+        help='Skip the relevance model for files larger than this many bytes (default: 200000; 0 disables).')
+    parser.add_argument(
+        '--filter-max-tokens', type=int, default=None,
+        help='Skip the relevance model for files larger than this many tokens (default: 12000; 0 disables).')
+    parser.add_argument(
+        '--filter-oversize', choices=('include', 'exclude', 'truncate'), default='truncate',
+        help='What to do with files over the size/token threshold: include, exclude, or truncate (default: truncate).')
+    parser.add_argument(
+        '--filter-binary', choices=('include', 'exclude', 'truncate'), default='exclude',
+        help='What to do with binary files: include, exclude, or truncate to a path-only preview (default: exclude).')
+    parser.add_argument(
+        '--filter-decisions', type=str, default=None,
+        help='Write per-file relevance decisions (path, decision, reason, tokens, cached, skipped_reason) as JSON.')
     # Optional flags such as --apply may appear before, between, or after
     # file paths. parse_args treats everything after the first positional
     # file as more files, so `--apply` at the end was a filename.
@@ -1033,6 +1111,56 @@ def save_files(files_dict: dict[str, str], target_directory: str | Path) -> None
             f.write(content)
         print(f"Saved: {full_path}")
 
+def _apply_relevance_filter(project_files, task, args):
+    """Keep only files the relevance filter marks yes.
+
+    ``project_files`` is the CLI's list of ``(absolute_path, content)``.
+    Decisions are keyed by the path relative to the working directory, which
+    is also the path serialized into the environment.
+    """
+    from .relevance import dump_decisions, filter_relevant, format_filter_summary
+
+    files_dict = {}
+    order = []
+    for file, content in project_files:
+        rel = absolute_to_relative(file)
+        files_dict[rel] = content
+        order.append((rel, file, content))
+
+    options = dict(
+        model=args.filter_model,
+        concurrency=args.filter_concurrency,
+        cache=args.filter_cache,
+        on_oversize=args.filter_oversize,
+        on_binary=args.filter_binary,
+        api_key=os.getenv("GPTDIFF_LLM_API_KEY"),
+        base_url=os.getenv("GPTDIFF_LLM_BASE_URL", "https://nano-gpt.com/api/v1/"),
+    )
+    # Omitting the flag uses the library default. 0 disables that limit.
+    if args.filter_max_bytes is not None:
+        options["max_bytes"] = None if args.filter_max_bytes <= 0 else args.filter_max_bytes
+    if args.filter_max_tokens is not None:
+        options["max_tokens"] = None if args.filter_max_tokens <= 0 else args.filter_max_tokens
+
+    print(f"Relevance filter: checking {len(files_dict)} files...")
+    try:
+        result = filter_relevant(files_dict, task, **options)
+    except Exception as exc:
+        print(f"\033[1;31mRelevance filter failed: {exc}\033[0m")
+        sys.exit(1)
+
+    print(format_filter_summary(result, verbose=getattr(args, "verbose", False)))
+    if getattr(args, "filter_decisions", None):
+        dump_decisions(result, args.filter_decisions)
+        print(f"Wrote relevance decisions to {args.filter_decisions}")
+
+    kept = set(result.files)
+    narrowed = [(file, content) for rel, file, content in order if rel in kept]
+    if not narrowed:
+        print("\033[1;33mRelevance filter kept 0 files. The diff will be generated with an empty environment.\033[0m")
+    return narrowed
+
+
 def main():
     global VERBOSE
     # Adding color support for Windows CMD
@@ -1068,6 +1196,9 @@ def main():
                     project_files.append((additional_path, f.read()))
             elif os.path.isdir(additional_path):
                 project_files.extend(load_project_files(additional_path, project_dir))
+
+    if args.filter_relevant:
+        project_files = _apply_relevance_filter(project_files, user_prompt, args)
 
     if args.prepend:
         prepend = args.prepend+"\n"

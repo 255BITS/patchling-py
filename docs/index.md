@@ -28,7 +28,7 @@ Files in, files out — no filesystem required. The diff is plain text you can l
 
 ## How it works
 
-1. **Build an environment** — serialize your files dict with `build_environment` (or scan a project directory with `load_project_files`)
+1. **Build an environment** — serialize your files dict with `build_environment` (or scan a project directory with `load_project_files`). On a large tree, `filter_relevant` (or `build_environment(..., filter_relevant=True)`) can ask a cheap model which files are relevant and send only those on.
 2. **Generate a diff** — `generate_diff` sends context + your goal to an LLM and returns a unified diff
 3. **Apply it** — `smartapply` patches per-file with AI-assisted conflict resolution, surviving hunks that `git apply` rejects
 

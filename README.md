@@ -87,7 +87,8 @@ See [examples/usage_example.py](examples/usage_example.py) for a runnable versio
 
 - `generate_diff(environment: str, goal: str, model: str = ...) -> str` — generates a unified diff implementing the goal. `model` defaults to the `GPTDIFF_MODEL` env var.
 - `smartapply(diff_text: str, files: dict[str, str], model: str = ...) -> dict[str, str]` — applies a diff with AI-powered conflict resolution. Handles new files, deletions, and hunks that standard patching rejects. Returns a new dict; input is not mutated.
-- `build_environment(files: dict[str, str]) -> str` — serializes a files dict into the environment string `generate_diff` expects.
+- `build_environment(files: dict[str, str]) -> str` — serializes a files dict into the environment string `generate_diff` expects. Pass `filter_relevant=True` and `task=` to drop files a cheap model marks irrelevant first.
+- `filter_relevant(files, task, model=..., concurrency=..., cache=...) -> FilterRelevantResult` — opt-in relevance filter for large directories. Each file is sent, with the task, to a cheap OpenAI-compatible model that answers yes/no. Only the `yes` files are returned for `generate_diff` and `smartapply`. The JS counterpart is `filterRelevant`.
 - `load_project_files(path, cwd) -> dict` / `save_files(files, base_dir)` — optional filesystem helpers for when you *do* want to read/write a real project (respects `.gitignore` and `.gptignore`).
 
 Full signatures, error handling, and edge cases: [API Reference](https://255bits.github.io/patchling-py/api).
@@ -135,6 +136,7 @@ export GPTDIFF_SMARTAPPLY_MODEL='gpt5-mini'
 | `GPTDIFF_MODEL` | Model for diff generation | `gemini-3-pro-preview` |
 | `GPTDIFF_SMARTAPPLY_MODEL` | Model for applying diffs | `GPTDIFF_MODEL` |
 | `GPTDIFF_LLM_BASE_URL` | OpenAI-compatible endpoint | `https://nano-gpt.com/api/v1/` |
+| `GPTDIFF_FILTER_MODEL` | Cheap model for `filter_relevant` | `gemini-2.0-flash` |
 
 ---
 
@@ -162,7 +164,7 @@ patchling "Add type hints to all functions" --apply
 patchling "Add logging" src/api/ src/utils/helpers.py
 ```
 
-Useful flags: `--model`, `--temperature`, `--prepend <file>` (custom instructions), `--image <path>` (visual context), `--nobeep`. Full list: [CLI Reference](https://255bits.github.io/patchling-py/cli).
+Useful flags: `--model`, `--temperature`, `--prepend <file>` (custom instructions), `--image <path>` (visual context), `--filter-relevant` (ask a cheap model which files to send; `--filter-model` picks that model), `--nobeep`. Full list: [CLI Reference](https://255bits.github.io/patchling-py/cli).
 
 Because changes arrive as diffs, the CLI is git-native: review with `git diff`, keep with `git add -p`, discard with `git checkout .`.
 
