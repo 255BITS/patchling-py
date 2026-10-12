@@ -46,8 +46,8 @@ def parse_arguments():
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=30000,
-        help="Maximum tokens to use for LLM responses"
+        default=None,
+        help="Maximum tokens for the LLM response. When omitted, smartapply sizes the budget to the input so parallel applies do not reserve a flat 30000-token balance."
     )
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output with detailed information')
     parser.add_argument('--dumb', action='store_true', default=False, help='Attempt dumb apply before trying smart apply')

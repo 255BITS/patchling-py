@@ -325,3 +325,371 @@ def parse_diff_per_file(diff_text):
         return dedup_diffs(diffs)
 
 
+# ---------------------------------------------------------------------------
+# In-memory appliers used by smartapply before (and as a check on) the LLM.
+# ---------------------------------------------------------------------------
+
+_HUNK_HEADER_RE = re.compile(
+    r"^@@(?: -(\d+)(?:,(\d+))?)?(?: \+(\d+)(?:,(\d+))?)? @@"
+)
+_AMBIGUOUS = object()
+
+
+def _is_ellipsis(text):
+    """True for unified-diff 'skip some lines' markers, not literal file text."""
+    return text.strip() in {"...", "…", "....", ".."}
+
+
+def _body_op(pline):
+    """Classify one hunk body line.
+
+    Returns ('skip', None), ('ambiguous', None), or (kind, text) where kind
+    is 'add', 'del', or 'context'.
+    """
+    if pline.startswith("\\"):
+        # "\ No newline at end of file" — not a content line.
+        return ("skip", None)
+    if pline.lstrip().startswith("```"):
+        # A closing fence left on an LLM diff. Not part of the file.
+        return ("skip", None)
+    # "++foo" is ambiguous: a doubled addition marker, or a real line that
+    # starts with '+'. Either reading can corrupt the file, so refuse.
+    if pline.startswith("++") and not pline.startswith("+++"):
+        return ("ambiguous", None)
+    if pline.startswith("+"):
+        return ("add", pline[1:])
+    if pline.startswith("-"):
+        return ("del", pline[1:])
+    if pline.startswith(" "):
+        return ("context", pline[1:])
+    return ("context", pline)
+
+
+def _parse_hunks(patch, strict_headers):
+    """Parse hunks from a single-file patch.
+
+    Returns a list of (hint, ops), None when the patch cannot be applied by
+    this parser, or `_AMBIGUOUS` for a doubled '+' line. Callers must not
+    guess at ambiguous lines.
+    """
+    lines = patch.splitlines()
+    hunks = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.lstrip().startswith("@@"):
+            i += 1
+            continue
+        header = line.strip()
+        if header == "@@":
+            hint = 0
+        else:
+            match = _HUNK_HEADER_RE.match(header)
+            if match:
+                orig = int(match.group(1)) if match.group(1) else 1
+                hint = max(orig - 1, 0)
+            elif strict_headers:
+                return None
+            else:
+                # "@@ ... @@" and other sloppy headers: ignore the numbers.
+                hint = 0
+        ops = []
+        i += 1
+        while i < len(lines) and not lines[i].lstrip().startswith("@@"):
+            kind, text = _body_op(lines[i])
+            i += 1
+            if kind == "skip":
+                continue
+            if kind == "ambiguous":
+                return _AMBIGUOUS
+            ops.append((kind, text))
+        if ops:
+            hunks.append((hint, ops))
+    if not hunks:
+        return None
+    return hunks
+
+
+def _assemble(original, lines):
+    """Join patched lines, preserving the original's trailing newline.
+
+    An empty original (a new file) is left without a forced extra newline so
+    a pure-addition hunk round-trips to the added text.
+    """
+    content = "\n".join(lines)
+    if content and original.endswith("\n"):
+        content += "\n"
+    return content
+
+
+def _find_block(lines, block, min_pos, hint):
+    """Index of `block` in `lines` at or after min_pos, nearest to hint."""
+    if not block:
+        return min(max(hint, min_pos), len(lines))
+    best = None
+    last = len(lines) - len(block)
+    for pos in range(min_pos, last + 1):
+        if lines[pos:pos + len(block)] == block:
+            if best is None or abs(pos - hint) < abs(best - hint):
+                best = pos
+    return best
+
+
+def apply_patch_to_content(original_content, patch):
+    """Apply one file's unified diff to a string. None if it does not fit.
+
+    Hunks are located by matching context and deletion lines, not by trusting
+    `@@` line numbers (LLM diffs often get those wrong). The `@@` start is
+    only a hint when the same block occurs more than once. Context must match
+    exactly, so a wrong-context hunk returns None instead of rewriting the
+    file with the diff's context text.
+    """
+    if original_content is None:
+        original_content = ""
+    parsed = _parse_hunks(patch, strict_headers=True)
+    if not parsed or parsed is _AMBIGUOUS:
+        return None
+
+    lines = original_content.splitlines()
+    new_lines = []
+    cursor = 0
+    for hint, ops in parsed:
+        block = [text for kind, text in ops if kind != "add"]
+        pos = _find_block(lines, block, cursor, hint)
+        if pos is None:
+            return None
+        new_lines.extend(lines[cursor:pos])
+        idx = pos
+        for kind, text in ops:
+            if kind == "add":
+                new_lines.append(text)
+                continue
+            if idx >= len(lines) or lines[idx] != text:
+                return None
+            if kind == "context":
+                new_lines.append(lines[idx])
+            idx += 1
+        cursor = idx
+    new_lines.extend(lines[cursor:])
+    return _assemble(original_content, new_lines)
+
+
+_MAX_DEL_CANDIDATES = 32
+
+
+def _del_assignments(lines, del_texts, min_pos):
+    """Increasing index tuples locating each deletion line, or None if too many."""
+    found = []
+
+    def rec(di, start, acc):
+        if len(found) > _MAX_DEL_CANDIDATES:
+            return
+        if di == len(del_texts):
+            found.append(tuple(acc))
+            return
+        text = del_texts[di]
+        for j in range(start, len(lines)):
+            if lines[j] == text:
+                acc.append(j)
+                rec(di + 1, j + 1, acc)
+                acc.pop()
+                if len(found) > _MAX_DEL_CANDIDATES:
+                    return
+
+    rec(0, min_pos, [])
+    if not found or len(found) > _MAX_DEL_CANDIDATES:
+        return None
+    return found
+
+
+def _score_assignment(lines, ops, assignment, min_pos):
+    """Prefer the deletion site whose real context lines also match.
+
+    Ellipsis markers and context that is simply wrong do not add or subtract.
+    They must not be written into the file; they only fail to confirm a site.
+    """
+    score = 0
+    pos = min_pos
+    di = 0
+    del_indexes = list(assignment)
+    for kind, text in ops:
+        if kind == "del":
+            pos = del_indexes[di] + 1
+            di += 1
+            score += 1
+            continue
+        if kind != "context" or _is_ellipsis(text):
+            continue
+        bound = del_indexes[di] if di < len(del_indexes) else len(lines)
+        for j in range(pos, bound):
+            if lines[j] == text:
+                score += 5
+                pos = j + 1
+                break
+    return score
+
+
+def _replacement_for_assignment(lines, ops, assignment):
+    """File span covering the deletion lines, with only +/- lines changed."""
+    span_start = assignment[0]
+    span_end = assignment[-1] + 1
+    out = []
+    pos = span_start
+    di = 0
+    for kind, text in ops:
+        if kind == "add":
+            out.append(text)
+            continue
+        if kind != "del":
+            # Context, including mismatched context and ellipsis, is not
+            # copied from the diff. Non-deleted file lines stay as they are.
+            continue
+        idx = assignment[di]
+        di += 1
+        if idx < pos or idx >= span_end:
+            return None
+        out.extend(lines[pos:idx])
+        pos = idx + 1
+    out.extend(lines[pos:span_end])
+    return span_start, span_end, out
+
+
+def _locate_hunk(lines, ops, min_pos):
+    del_texts = [text for kind, text in ops if kind == "del"]
+    if not del_texts:
+        return None
+    assignments = _del_assignments(lines, del_texts, min_pos)
+    if not assignments:
+        return None
+    scored = [
+        (_score_assignment(lines, ops, assignment, min_pos), assignment)
+        for assignment in assignments
+    ]
+    best = max(score for score, _ in scored)
+    winners = [assignment for score, assignment in scored if score == best]
+    if len(set(winners)) != 1:
+        return None
+    return _replacement_for_assignment(lines, ops, winners[0])
+
+
+def apply_changes_only(original_content, patch):
+    """Apply only the diff's '+' and '-' lines. None if that is not safe.
+
+    Wrong-context hunks (bad `@@` numbers, `...` gaps, context text that
+    does not match the file) still have a definite edit when each removed
+    line occurs in the file. Context text is used only to pick which
+    occurrence, and is never written over the file. Unrelated lines, including
+    each file's existing first line, stay byte-for-byte.
+    """
+    if original_content is None:
+        original_content = ""
+    parsed = _parse_hunks(patch, strict_headers=False)
+    if not parsed or parsed is _AMBIGUOUS:
+        return None
+
+    lines = original_content.splitlines()
+    pieces = []
+    cursor = 0
+    for _hint, ops in parsed:
+        located = _locate_hunk(lines, ops, cursor)
+        if located is None:
+            return None
+        start, end, replacement = located
+        if start < cursor:
+            return None
+        pieces.extend(lines[cursor:start])
+        pieces.extend(replacement)
+        cursor = end
+    pieces.extend(lines[cursor:])
+    return _assemble(original_content, pieces)
+
+
+def _change_spec(patch):
+    """Return (deletions, additions, context lines), None, or `_AMBIGUOUS`."""
+    parsed = _parse_hunks(patch, strict_headers=False)
+    if parsed is None or parsed is _AMBIGUOUS:
+        return parsed
+    dels = []
+    adds = []
+    contexts = []
+    for _hint, ops in parsed:
+        for kind, text in ops:
+            if kind == "del":
+                dels.append(text)
+            elif kind == "add":
+                adds.append(text)
+            elif not _is_ellipsis(text):
+                contexts.append(text)
+    return dels, adds, contexts
+
+
+def _can_consume_all(lines, needed):
+    if not needed:
+        return True
+    have = defaultdict(int)
+    for line in lines:
+        have[line] += 1
+    need = defaultdict(int)
+    for line in needed:
+        need[line] += 1
+    return all(have[text] >= count for text, count in need.items())
+
+
+def _consume_dels(lines, dels):
+    need = defaultdict(int)
+    for line in dels:
+        need[line] += 1
+    remaining = []
+    for line in lines:
+        if need[line] > 0:
+            need[line] -= 1
+        else:
+            remaining.append(line)
+    return remaining
+
+
+def llm_output_respects_diff(original, updated, patch):
+    """True when an LLM rewrite did not leak context or drop unrelated lines.
+
+    Malformed patches (`++` lines, unparseable hunks) return True so the LLM
+    can still repair them. When every '-' line is present in the file, the
+    rewrite may only remove those lines and add the '+' lines: every other
+    original line must survive, in order. Context text that is not already in
+    the file must not show up in the result unless it is itself a '+' line.
+    """
+    if original is None:
+        original = ""
+    if updated is None:
+        return False
+    spec = _change_spec(patch)
+    if spec is None or spec is _AMBIGUOUS:
+        return True
+    dels, adds, contexts = spec
+    old = original.splitlines()
+    new = updated.splitlines()
+    add_set = set(adds)
+    old_set = set(old)
+    for context in contexts:
+        if context not in old_set and context in new and context not in add_set:
+            return False
+    if not _can_consume_all(old, dels):
+        # The removed text is not in the file verbatim; the model is doing a
+        # fuzzy edit. The context-leak check above is the guard we can apply
+        # without rejecting a legitimate fuzzy rewrite.
+        return True
+
+    need = defaultdict(int)
+    for line in adds:
+        need[line] += 1
+    remaining = _consume_dels(old, dels)
+    ri = 0
+    for line in new:
+        if ri < len(remaining) and remaining[ri] == line:
+            ri += 1
+        elif need[line] > 0:
+            need[line] -= 1
+        else:
+            return False
+    return ri == len(remaining)
+
+
