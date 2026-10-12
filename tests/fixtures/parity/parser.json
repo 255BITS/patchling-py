@@ -1,0 +1,21 @@
+{
+  "description": "Leading standalone yes/no after whitespace, quotes, markdown bold, backticks, and Answer:/Decision: prefixes. Think tags are stripped first. Anything else is malformed (null).",
+  "cases": [
+    {"id": "plain-yes", "raw": "yes", "decision": "yes"},
+    {"id": "plain-no", "raw": "NO", "decision": "no"},
+    {"id": "punctuation", "raw": "Yes.", "decision": "yes"},
+    {"id": "quoted-yes", "raw": "\"yes\"", "decision": "yes"},
+    {"id": "quoted-no", "raw": "'no'", "decision": "no"},
+    {"id": "bold-yes", "raw": "**yes**", "decision": "yes"},
+    {"id": "backtick-no", "raw": "`no`", "decision": "no"},
+    {"id": "answer-prefix", "raw": "Answer: yes, the parser lives here", "decision": "yes"},
+    {"id": "decision-prefix", "raw": "Decision: no", "decision": "no"},
+    {"id": "negated", "raw": "There is no doubt this file is required", "decision": null},
+    {"id": "explanatory", "raw": "This file is unrelated to the task", "decision": null},
+    {"id": "nope", "raw": "nope", "decision": null},
+    {"id": "leading-yes-later-no", "raw": "yes for the helper, no for the tests", "decision": "yes"},
+    {"id": "think-then-yes", "raw": "<think>no, skip it</think>\nyes", "decision": "yes"},
+    {"id": "empty", "raw": "", "decision": null},
+    {"id": "whitespace", "raw": "  \n  yes — needed", "decision": "yes"}
+  ]
+}

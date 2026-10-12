@@ -184,6 +184,99 @@ set_env("GPTDIFF_MODEL", None)  # fall back to the process environment, then DEF
 
 `extract_diff_blocks` returns every fence whose language is exactly `diff`, including when the fence is surrounded by prose. Text with no `diff` fence is left for `parse_diff_per_file` to read as a raw diff.
 
+### filter_relevant
+
+```python
+def filter_relevant(
+    files: Dict[str, str],
+    task: str,
+    model: str = None,          # $GPTDIFF_FILTER_MODEL or xiaomi/mimo-v2.6-flash
+                                # Flask recall 1.0 / ~0.8x overhead: UNVERIFIED
+    concurrency: int = 8,
+    cache=None,                 # RelevanceCache, path, None, or False
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    max_bytes: Optional[int] = 200_000,
+    max_tokens: Optional[int] = 12_000,
+    on_oversize: str = "truncate",  # include, exclude, or truncate
+    on_binary: str = "exclude",     # include, exclude, or truncate
+    skip_patterns=None,         # lockfile/generated globs; () disables
+) -> FilterRelevantResult
+```
+
+Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`. The default model is `xiaomi/mimo-v2.6-flash`. A pallets/flask pass reported recall 1.0 and about 0.8x the token overhead of the next model tried. Those figures are **UNVERIFIED**.
+
+`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, `truncated`, or `ignored`), `error` when that file's call failed or the answer was empty or malformed, and `failed_open` for those includes. `result.failed_open` lists them; `result.to_dict()` counts them. Malformed answers are failed open too, so the count matches the number of fallbacks.
+
+### Shared contract (prompt v3)
+
+Python and the JS library use the same rules:
+
+- Prompt version `3`. The system prompt is the relevance-filter paragraph in `patchling/relevance.py` (`_SYSTEM_PROMPT`). The user message is the task (intent), one file path, an optional truncation note, and the file contents.
+- Every call requests `max_tokens=1024` and `reasoning_effort="low"`. A 4xx that names `reasoning_effort` is retried once without the parameter. The decision is cached under the effort that was actually sent (`low`, or empty when the retry omitted it). A later lookup tries the `low` key first, then the empty-effort key.
+- Timeouts, HTTP 5xx, and billing-reservation errors are retried with backoff, then the file fails open.
+- The cache key is the SHA-256 of length-prefixed UTF-8 fields. Each field is `<utf-8 byte length>:<bytes>` followed by a newline, in order: prompt version, model, output-token limit, effort sent, task, **file path**, mode (`full`, `truncated`, or `binary`), the preview note (empty when there is none), and the **exact body sent**. A full file whose text is `abc` does not share a key with a truncated preview that is also `abc`. Decisions are per path. Identical contents at two paths are two calls, even when the cache is off.
+- The decision is the leading token after whitespace, one `<think>` block, one code fence, markdown `**` / `__` / backticks, straight or curly quotes, and an optional `Answer:` or `Decision:` prefix. That token must be exactly `yes` or `no`, then the end of the string, whitespace, or one of `. , ! : ; )`. Anything else is malformed: `failed_open=true`, the file is included, and the decision is not cached.
+- A missing `choices` list, an empty list, a missing message or content field, and a non-JSON body are failed open inside that same handling and are not cached.
+- A cache read error is a miss: the model is called normally and the run does not abort. A cache write error is logged and does not abort the run.
+- Valid UTF-8 bytes are decoded to text and are not replaced with an empty string. Invalid UTF-8 takes the binary path. Binary detection of a `str`, and the shared 8192-byte window, decodes as UTF-8 and tolerates only an incomplete trailing sequence of at most 3 bytes. A NUL or any other invalid byte is binary. A non-empty buffer that decodes to empty text is binary.
+- Token truncation keeps the first `maxTokens * 4` Unicode code points and never splits a code point or a surrogate pair. The byte cap cuts on a code-point boundary in UTF-8 and never emits U+FFFD. The shared fixture is `tests/fixtures/parity/relevance.json`.
+- The token estimate is `ceil(code points / 4)`. Empty text is 0. tiktoken is not used for this check.
+- Skip globs are case-insensitive. `**` crosses directories and `*` does not. `skipped_reason` for a skip is `ignored`. The list includes `**/*.min.js` and `**/*.min.mjs`.
+
+Canonical skip list:
+
+```text
+**/package-lock.json
+**/yarn.lock
+**/pnpm-lock.yaml
+**/bun.lock
+**/bun.lockb
+**/npm-shrinkwrap.json
+**/Cargo.lock
+**/Gemfile.lock
+**/poetry.lock
+**/Pipfile.lock
+**/composer.lock
+**/go.sum
+**/uv.lock
+**/pdm.lock
+**/flake.lock
+**/pubspec.lock
+**/packages.lock.json
+**/Package.resolved
+**/*.min.js
+**/*.min.mjs
+**/*.min.css
+**/*.map
+**/dist/**
+**/build/**
+**/.next/**
+**/coverage/**
+**/__pycache__/**
+**/*.pyc
+**/*.pyo
+**/*.generated.*
+```
+
+- Checks run with bounded `concurrency`.
+- `cache` is in-memory for the call. Pass a `RelevanceCache` to reuse it, or a filesystem path to persist it. Only a clear `yes` or `no` is stored.
+- Binary files and files over the size or token threshold are not sent in full. `include` keeps them without a call, `exclude` drops them, `truncate` asks about a truncated or redacted preview. A `yes` on a truncated file still forwards the original contents.
+- Pass `skip_patterns=()` to disable the skip list, or a list of globs to replace it. `build_environment(..., skip_patterns=)` forwards the same option.
+
+```python
+from patchling import filter_relevant, generate_diff, smartapply, build_environment
+
+result = filter_relevant(files, "Rename add() to sum_numbers()")
+for decision in result.decisions:
+    print(decision.path, decision.decision, decision.skipped_reason or decision.error or "")
+
+diff = generate_diff(build_environment(result.files), "Rename add() to sum_numbers()")
+updated = smartapply(diff, result.files)
+```
+
+`build_environment(..., filter_relevant=True, task=...)` runs the same filter before serializing. Pass a `decisions` list to collect the records. The CLI flag is `--filter-relevant`.
+
 ## Authentication & Configuration
 ```python
 # Option 1: process environment

@@ -1,0 +1,18 @@
+{
+  "description": "UTF-8 truncation on a code-point boundary. Never emit U+FFFD. Shared with the JS filter.",
+  "cases": [
+    {"id": "2byte-max-1", "text": "éX", "max_bytes": 1, "expected": ""},
+    {"id": "2byte-max-2", "text": "éX", "max_bytes": 2, "expected": "é"},
+    {"id": "2byte-max-3", "text": "éX", "max_bytes": 3, "expected": "éX"},
+    {"id": "3byte-max-1", "text": "€X", "max_bytes": 1, "expected": ""},
+    {"id": "3byte-max-2", "text": "€X", "max_bytes": 2, "expected": ""},
+    {"id": "3byte-max-3", "text": "€X", "max_bytes": 3, "expected": "€"},
+    {"id": "3byte-max-4", "text": "€X", "max_bytes": 4, "expected": "€X"},
+    {"id": "4byte-max-1", "text": "😀X", "max_bytes": 1, "expected": ""},
+    {"id": "4byte-max-2", "text": "😀X", "max_bytes": 2, "expected": ""},
+    {"id": "4byte-max-3", "text": "😀X", "max_bytes": 3, "expected": ""},
+    {"id": "4byte-max-4", "text": "😀X", "max_bytes": 4, "expected": "😀"},
+    {"id": "4byte-max-5", "text": "😀X", "max_bytes": 5, "expected": "😀X"},
+    {"id": "ascii-max-1", "text": "ab", "max_bytes": 1, "expected": "a"}
+  ]
+}

@@ -273,6 +273,7 @@ def call_llm(
     max_tokens: int | None,
     temperature: float,
     budget_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> Any:
     # Check if we're using Anthropic
     if "api.anthropic.com" in base_url:
@@ -365,12 +366,45 @@ def call_llm(
     else:
         # Use OpenAI client as before
         client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
-        return client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature
+        request = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        # Relevance checks set this so a reasoning model does not spend the
+        # whole completion budget on hidden reasoning and return an empty answer.
+        if reasoning_effort:
+            request["reasoning_effort"] = reasoning_effort
+        try:
+            return client.chat.completions.create(**request)
+        except TypeError as exc:
+            # Retry once, without the parameter, only when this call sent it
+            # and the error says the parameter is unsupported. A generic
+            # TypeError is not retried, and a call that did not send
+            # reasoning_effort is made exactly once.
+            if "reasoning_effort" in request and _provider_rejected_reasoning_effort(exc):
+                request.pop("reasoning_effort", None)
+                return client.chat.completions.create(**request)
+            raise
+
+
+def _provider_rejected_reasoning_effort(exc: BaseException) -> bool:
+    """True when the error says ``reasoning_effort`` itself is unsupported."""
+    text = str(exc).lower()
+    if "reasoning_effort" not in text and "reasoning effort" not in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "unsupported",
+            "not supported",
+            "unexpected keyword",
+            "invalid",
+            "unknown parameter",
+            "unrecognized",
         )
+    )
 
 def call_llm_for_diff(
     system_prompt: str,
@@ -497,8 +531,63 @@ You must include the '--- file' and/or '+++ file' part of the diff. File modific
     return full_response, "\n".join(diff_response), prompt_tokens, completion_tokens, total_tokens
 
 # New API functions
-def build_environment(files_dict: dict[str, str]) -> str:
-    """Rebuild environment string from file dictionary"""
+_FILTER_LIMIT_UNSET = object()
+
+
+def build_environment(
+    files_dict: dict[str, str],
+    *,
+    filter_relevant: bool = False,
+    task: str | None = None,
+    filter_model: str | None = None,
+    concurrency: int = 8,
+    cache=None,
+    decisions: list | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    max_bytes=_FILTER_LIMIT_UNSET,
+    max_tokens=_FILTER_LIMIT_UNSET,
+    on_oversize: str = "truncate",
+    on_binary: str = "exclude",
+    skip_patterns=None,
+) -> str:
+    """Rebuild environment string from file dictionary.
+
+    Pass ``filter_relevant=True`` with ``task`` to drop files a cheap model
+    marks irrelevant before the environment is serialized (the same opt-in as
+    the ``--filter-relevant`` CLI flag). ``decisions``, when a list, receives
+    one relevance decision per input file. Keyword-only arguments keep
+    existing ``build_environment(files)`` callers working.
+
+    ``max_bytes=None`` / ``max_tokens=None`` disable that limit. Omit them to
+    use the filter's defaults. ``skip_patterns=()`` sends lockfiles and
+    generated files; omit it to skip those by default.
+    """
+    if filter_relevant:
+        if not task:
+            raise ValueError("task is required when filter_relevant=True")
+        from .relevance import filter_relevant as _filter_relevant
+
+        options = dict(
+            model=filter_model,
+            concurrency=concurrency,
+            cache=cache,
+            api_key=api_key,
+            base_url=base_url,
+            on_oversize=on_oversize,
+            on_binary=on_binary,
+        )
+        if skip_patterns is not None:
+            options["skip_patterns"] = skip_patterns
+        if max_bytes is not _FILTER_LIMIT_UNSET:
+            options["max_bytes"] = max_bytes
+        if max_tokens is not _FILTER_LIMIT_UNSET:
+            options["max_tokens"] = max_tokens
+        result = _filter_relevant(files_dict, task, **options)
+        if decisions is not None:
+            decisions.extend(result.decisions)
+        files_dict = result.files
+
     env = []
     for path, content in files_dict.items():
         env.append(f"File: {path}")
@@ -744,6 +833,39 @@ def parse_arguments():
     parser.add_argument('--nowarn', action='store_true', help='Disable large token warning')
     parser.add_argument('--anthropic_budget_tokens', type=int, default=None, help='Budget tokens for Anthropic extended thinking')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output with detailed information')
+    parser.add_argument(
+        '--filter-relevant', action='store_true',
+        help='Ask a cheap model which files are relevant to the prompt, and send only the yes files to generate the diff.')
+    parser.add_argument(
+        '--filter-model', type=str, default=None,
+        help='Model for --filter-relevant (default: $GPTDIFF_FILTER_MODEL or xiaomi/mimo-v2.6-flash).')
+    parser.add_argument(
+        '--filter-concurrency', type=int, default=8,
+        help='Maximum number of relevance checks to run at once (default: 8).')
+    parser.add_argument(
+        '--filter-cache', type=str, default=None,
+        help='On-disk JSON cache for relevance decisions. The key hashes prompt version, model, output-token limit, the effort actually sent, task, file path, mode, preview note, and the body sent.')
+    parser.add_argument(
+        '--filter-max-bytes', type=int, default=None,
+        help='Skip the relevance model for files larger than this many bytes (default: 200000; 0 disables).')
+    parser.add_argument(
+        '--filter-max-tokens', type=int, default=None,
+        help='Skip the relevance model for files larger than this many tokens (default: 12000; 0 disables).')
+    parser.add_argument(
+        '--filter-oversize', choices=('include', 'exclude', 'truncate'), default='truncate',
+        help='What to do with files over the size/token threshold: include, exclude, or truncate (default: truncate).')
+    parser.add_argument(
+        '--filter-binary', choices=('include', 'exclude', 'truncate'), default='exclude',
+        help='What to do with binary files: include, exclude, or truncate to a path-only preview (default: exclude).')
+    parser.add_argument(
+        '--filter-decisions', type=str, default=None,
+        help='Write per-file relevance decisions (path, decision, reason, tokens, cached, skipped_reason) as JSON.')
+    parser.add_argument(
+        '--filter-skip-pattern', action='append', default=None,
+        help='Additional glob to skip before the relevance check (lockfiles and minified files are skipped by default).')
+    parser.add_argument(
+        '--filter-no-skip-generated', action='store_true',
+        help='Do not skip lockfiles and generated files (uv.lock, package-lock.json, yarn.lock, poetry.lock, *.min.js, and similar).')
     # Optional flags such as --apply may appear before, between, or after
     # file paths. parse_args treats everything after the first positional
     # file as more files, so `--apply` at the end was a filename.
@@ -896,7 +1018,7 @@ def build_environment_from_filelist(file_list, cwd):
             continue
     return build_environment(files_dict)
 
-def smart_apply_patch(project_dir, diff_text, user_prompt, args):
+def smart_apply_patch(project_dir, diff_text, user_prompt, args, original_files=None):
     """
     Attempt to apply a diff via smartapply: process each file concurrently using the LLM.
     """
@@ -932,7 +1054,17 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args):
             return
 
         original_content = ""
-        if full_path.exists():
+        # Prefer the full pre-filter map. A file the relevance filter dropped
+        # from the prompt is still applied against its original contents.
+        if original_files is not None and file_path in original_files:
+            mapped = original_files[file_path]
+            if isinstance(mapped, str):
+                original_content = mapped
+            elif isinstance(mapped, (bytes, bytearray)):
+                original_content = bytes(mapped).decode("utf-8", errors="replace")
+            else:
+                original_content = str(mapped)
+        elif full_path.exists():
             try:
                 original_content = full_path.read_text()
             except (UnicodeDecodeError, IOError) as e:
@@ -1033,6 +1165,63 @@ def save_files(files_dict: dict[str, str], target_directory: str | Path) -> None
             f.write(content)
         print(f"Saved: {full_path}")
 
+def _apply_relevance_filter(project_files, task, args):
+    """Keep only files the relevance filter marks yes.
+
+    ``project_files`` is the CLI's list of ``(absolute_path, content)``.
+    Decisions are keyed by the path relative to the working directory, which
+    is also the path serialized into the environment.
+    """
+    from .relevance import dump_decisions, filter_relevant, format_filter_summary
+
+    files_dict = {}
+    order = []
+    for file, content in project_files:
+        rel = absolute_to_relative(file)
+        files_dict[rel] = content
+        order.append((rel, file, content))
+
+    options = dict(
+        model=args.filter_model,
+        concurrency=args.filter_concurrency,
+        cache=args.filter_cache,
+        on_oversize=args.filter_oversize,
+        on_binary=args.filter_binary,
+    )
+    # Credentials go through resolve_api_key / resolve_base_url so set_env
+    # overrides and the process environment are both honored.
+    extra_patterns = list(getattr(args, "filter_skip_pattern", None) or [])
+    if getattr(args, "filter_no_skip_generated", False):
+        options["skip_patterns"] = extra_patterns
+    elif extra_patterns:
+        from .relevance import DEFAULT_SKIP_PATTERNS
+
+        options["skip_patterns"] = list(DEFAULT_SKIP_PATTERNS) + extra_patterns
+    # Omitting the flag uses the library default. 0 disables that limit.
+    if args.filter_max_bytes is not None:
+        options["max_bytes"] = None if args.filter_max_bytes <= 0 else args.filter_max_bytes
+    if args.filter_max_tokens is not None:
+        options["max_tokens"] = None if args.filter_max_tokens <= 0 else args.filter_max_tokens
+
+    print(f"Relevance filter: checking {len(files_dict)} files...")
+    try:
+        result = filter_relevant(files_dict, task, **options)
+    except Exception as exc:
+        print(f"\033[1;31mRelevance filter failed: {exc}\033[0m")
+        sys.exit(1)
+
+    print(format_filter_summary(result, verbose=getattr(args, "verbose", False)))
+    if getattr(args, "filter_decisions", None):
+        dump_decisions(result, args.filter_decisions)
+        print(f"Wrote relevance decisions to {args.filter_decisions}")
+
+    kept = set(result.files)
+    narrowed = [(file, content) for rel, file, content in order if rel in kept]
+    if not narrowed:
+        print("\033[1;33mRelevance filter kept 0 files. The diff will be generated with an empty environment.\033[0m")
+    return narrowed
+
+
 def main():
     global VERBOSE
     # Adding color support for Windows CMD
@@ -1068,6 +1257,12 @@ def main():
                     project_files.append((additional_path, f.read()))
             elif os.path.isdir(additional_path):
                 project_files.extend(load_project_files(additional_path, project_dir))
+
+    # Keep every loaded file. The filter narrows only the prompt; --apply
+    # still patches the full original map, including files left out of the diff prompt.
+    original_project_files = list(project_files)
+    if args.filter_relevant:
+        project_files = _apply_relevance_filter(project_files, user_prompt, args)
 
     if args.prepend:
         prepend = args.prepend+"\n"
@@ -1191,7 +1386,13 @@ def main():
         print("\nAttempting apply with the following diff:")
         print(color_code_diff(diff_text))
         print("\033[94m**Attempting to apply patch using basic method...**\033[0m")
-        smart_apply_patch(project_dir, diff_text, user_prompt, args)
+        original_map = {
+            absolute_to_relative(file): content
+            for file, content in original_project_files
+        }
+        smart_apply_patch(
+            project_dir, diff_text, user_prompt, args, original_files=original_map
+        )
         #apply_result = apply_diff(project_dir, diff_text)
         #if apply_result:
         #    print(f"\033[1;32mPatch applied successfully with basic apply.\033[0m")

@@ -22,6 +22,12 @@ from .core import (
     swallow_reasoning,
 )
 from .env import DEFAULT_BASE_URL, DEFAULT_MODEL, get_env, set_env
+from .relevance import (
+    FilterRelevantResult,
+    RelevanceCache,
+    RelevanceDecision,
+    filter_relevant,
+)
 
 __version__ = "0.8.1"
 
@@ -29,6 +35,9 @@ __all__ = [
     "__version__",
     "DEFAULT_BASE_URL",
     "DEFAULT_MODEL",
+    "FilterRelevantResult",
+    "RelevanceCache",
+    "RelevanceDecision",
     "SmartApplyError",
     "apply_diff",
     "build_environment",
@@ -36,6 +45,7 @@ __all__ = [
     "call_llm_for_diff",
     "color_code_diff",
     "extract_diff_blocks",
+    "filter_relevant",
     "generate_diff",
     "get_env",
     "load_project_files",

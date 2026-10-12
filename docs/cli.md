@@ -82,6 +82,30 @@ patchling "Update config system" config/ utils/config_loader.py
 `--nowarn`: Disable the warning and confirmation prompt for large token usage
 `--verbose`: Enable verbose output for detailed information during execution
 
+### Relevance filter
+
+For a large tree, `--filter-relevant` asks a cheap model whether each file matters to the prompt and sends only the `yes` files on to diff generation. The same base URL and API key as the rest of the tool are used (`GPTDIFF_LLM_BASE_URL`, `GPTDIFF_LLM_API_KEY`). The model defaults to `GPTDIFF_FILTER_MODEL` or `xiaomi/mimo-v2.6-flash`. A pallets/flask pass reported recall 1.0 and about 0.8x the token overhead of the next model tried. Those figures are **UNVERIFIED**. Each check uses prompt version 3, 1024 output tokens, and `reasoning_effort=low`.
+
+```bash
+patchling "Add structured logging to the request handlers" --filter-relevant --call
+patchling "Rename the helper" --filter-relevant --filter-model xiaomi/mimo-v2.6-flash --apply
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--filter-relevant` | Turn the filter on |
+| `--filter-model` | Model for the yes/no checks |
+| `--filter-concurrency` | How many checks run at once (default 8) |
+| `--filter-cache PATH` | JSON cache. The key hashes prompt version, model, output-token limit, the effort actually sent, task, path, mode, preview note, and the body sent |
+| `--filter-max-bytes` / `--filter-max-tokens` | Threshold past which a file is not sent in full (defaults 200000 bytes and 12000 tokens; `0` disables) |
+| `--filter-oversize` | `include`, `exclude`, or `truncate` (default `truncate`) |
+| `--filter-binary` | `include`, `exclude`, or `truncate` (default `exclude`) |
+| `--filter-skip-pattern GLOB` | Also skip this glob (repeatable). Defaults are case-insensitive and include lockfiles, `dist/`, `*.min.js`, `*.min.mjs`, and `*.pyc` |
+| `--filter-no-skip-generated` | Send lockfiles and generated files to the relevance model. A skipped file's reason is `ignored` |
+| `--filter-decisions PATH` | Write every per-file decision as JSON |
+
+A leading `yes` or `no` is the decision. Anything else (including an empty answer, a negated sentence such as "There is no doubt…", or explanatory wording) keeps the file, marks it failed open, and is not cached. The summary counts every such file, one per path. Timeouts and 5xx responses are retried first. A cache read error is treated as a miss and the model is called; a cache write error does not stop the run. `--apply` patches the full original file map, including files the filter left out of the prompt. `--verbose` prints each decision. The library call is `filter_relevant` (JS: `filterRelevant`). The canonical skip list and the parity fixture are in the [API reference](api.md) and `tests/fixtures/parity/relevance.json`. A benchmark that scores a hand-labeled file list lives at `bench/relevance/`.
+
 `--nobeep`  
 **Silence completion alerts**  
 *Example:*  
@@ -94,6 +118,7 @@ Patchling uses the following environment variables:
 - `GPTDIFF_LLM_API_KEY`: API key for the LLM service
 - `GPTDIFF_LLM_BASE_URL`: Base URL for the LLM API (default: https://nano-gpt.com/api/v1/)
 - `GPTDIFF_MODEL`: Default model for generating diffs (default: `deepseek-reasoner`, exported as `DEFAULT_MODEL`)
+- `GPTDIFF_FILTER_MODEL`: Cheap model for `--filter-relevant` (default: xiaomi/mimo-v2.6-flash). Flask recall 1.0 and ~0.8x overhead figures for that default are UNVERIFIED.
 
 For the smartapply feature, you can set separate variables:
 - `GPTDIFF_SMARTAPPLY_MODEL`: Model for smartapply (recommended: `gpt5-mini`, fast and reliable for applying diffs; defaults to `GPTDIFF_MODEL` if not set)
