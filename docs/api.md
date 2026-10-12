@@ -191,6 +191,7 @@ def filter_relevant(
     files: Dict[str, str],
     task: str,
     model: str = None,          # $GPTDIFF_FILTER_MODEL or xiaomi/mimo-v2.6-flash
+                                # Flask recall 1.0 / ~0.8x overhead: UNVERIFIED
     concurrency: int = 8,
     cache=None,                 # RelevanceCache, path, None, or False
     api_key: Optional[str] = None,
@@ -203,15 +204,63 @@ def filter_relevant(
 ) -> FilterRelevantResult
 ```
 
-Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`. The default model is `xiaomi/mimo-v2.6-flash`.
+Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`. The default model is `xiaomi/mimo-v2.6-flash`. A pallets/flask pass reported recall 1.0 and about 0.8x the token overhead of the next model tried. Those figures are **UNVERIFIED**.
 
-`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, `truncated`, or `generated`), `error` when that file's call failed or the answer was empty, and `failed_open` for those includes. `result.failed_open` is the list of those files; `result.to_dict()` counts them.
+`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, `truncated`, or `generated`), `error` when that file's call failed or the answer was empty or malformed, and `failed_open` for those includes. `result.failed_open` lists them; `result.to_dict()` counts them. Malformed answers are failed open too, so the count matches the number of fallbacks.
+
+### Shared contract (prompt v3)
+
+Python and the JS library use the same rules:
+
+- Prompt version `3`. The system prompt is the relevance-filter paragraph in `patchling/relevance.py` (`_SYSTEM_PROMPT`). The user message is the task (intent), one file path, an optional truncation note, and the file contents.
+- Every call requests `max_tokens=1024` and `reasoning_effort="low"`. A 4xx that names `reasoning_effort` is retried once without the parameter.
+- Timeouts, HTTP 5xx, and billing-reservation errors are retried with backoff, then the file fails open.
+- The cache key is the SHA-256 of these fields joined by NUL: prompt version, model, output-token limit, reasoning effort, intent, **file path**, and the content **after truncation**. Decisions are per path. Identical contents at two paths are two calls, even when the cache is off.
+- The decision is the leading standalone `yes` or `no` after whitespace, quotes, markdown bold, backticks, and an `Answer:` or `Decision:` prefix. `<think>` blocks are stripped first. Anything else is malformed: `failed_open=true`, the file is included, and the decision is not cached.
+- A cache read error fails that file open and is logged. A cache write error is logged and does not abort the run.
+- Binary detection decodes the first 8192 bytes as UTF-8 and tolerates only an incomplete trailing sequence of at most 3 bytes. A NUL or any other invalid byte is binary.
+- Truncation cuts on a Unicode code-point boundary and never emits U+FFFD. Fixtures for 2-byte, 3-byte, and 4-byte characters live in `tests/fixtures/parity/`.
+- The token estimate is characters divided by 4 (empty text is 0; any other text is at least 1). tiktoken is not used for this check.
+- Skip globs are case-insensitive. `**` crosses directories and `*` does not. `skipped_reason` for a skip is `generated`.
+
+Canonical skip list:
+
+```text
+**/package-lock.json
+**/yarn.lock
+**/pnpm-lock.yaml
+**/bun.lock
+**/bun.lockb
+**/npm-shrinkwrap.json
+**/Cargo.lock
+**/Gemfile.lock
+**/poetry.lock
+**/Pipfile.lock
+**/composer.lock
+**/go.sum
+**/uv.lock
+**/pdm.lock
+**/flake.lock
+**/pubspec.lock
+**/packages.lock.json
+**/Package.resolved
+**/*.min.js
+**/*.min.css
+**/*.map
+**/dist/**
+**/build/**
+**/.next/**
+**/coverage/**
+**/__pycache__/**
+**/*.pyc
+**/*.pyo
+**/*.generated.*
+```
 
 - Checks run with bounded `concurrency`.
-- `cache` is in-memory for the call. Pass a `RelevanceCache` to reuse it, or a filesystem path to persist it. The key is the model, a hash of the task, a hash of the file contents, the truncation tag, the output-token limit, and the prompt version. Only a clear `yes` or `no` is stored. Ambiguous answers, empty answers, and errors are not.
+- `cache` is in-memory for the call. Pass a `RelevanceCache` to reuse it, or a filesystem path to persist it. Only a clear `yes` or `no` is stored.
 - Binary files and files over the size or token threshold are not sent in full. `include` keeps them without a call, `exclude` drops them, `truncate` asks about a truncated or redacted preview. A `yes` on a truncated file still forwards the original contents.
-- Lockfiles and generated bundles (`uv.lock`, `package-lock.json`, `yarn.lock`, `poetry.lock`, `*.min.js`, and similar) are skipped with `skipped_reason="generated"`. Pass `skip_patterns=()` to disable that, or a list of globs to replace it. `build_environment(..., skip_patterns=)` forwards the same option.
-- Think tags are stripped before the answer is read. A non-empty ambiguous answer includes the file and is not cached. An empty answer is an error (failed open), not an ambiguous yes. Timeouts, 5xx responses, and billing-reservation failures are retried with backoff before the file is failed open. Reasoning models are asked not to think and get a larger completion budget so a yes/no is not swallowed by hidden reasoning.
+- Pass `skip_patterns=()` to disable the skip list, or a list of globs to replace it. `build_environment(..., skip_patterns=)` forwards the same option.
 
 ```python
 from patchling import filter_relevant, generate_diff, smartapply, build_environment

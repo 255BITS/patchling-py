@@ -1,0 +1,15 @@
+{
+  "description": "Binary detection on the first 8192 bytes. An incomplete trailing UTF-8 sequence of at most 3 bytes is still text. NUL and genuinely invalid bytes are binary.",
+  "cases": [
+    {"id": "nul", "hex": "6100", "expect_binary": true},
+    {"id": "invalid-ff", "hex": "61ff62", "expect_binary": true},
+    {"id": "bad-continuation", "hex": "c341", "expect_binary": true},
+    {"id": "valid-2byte", "hex": "c3a9", "expect_binary": false},
+    {"id": "valid-3byte", "hex": "e282ac", "expect_binary": false},
+    {"id": "valid-4byte", "hex": "f09f9880", "expect_binary": false},
+    {"id": "cut-2byte-at-8192", "fill": "a", "length": 8192, "tail_hex": "c3", "expect_binary": false},
+    {"id": "cut-3byte-at-8192", "fill": "a", "length": 8192, "tail_hex": "e282", "expect_binary": false},
+    {"id": "cut-4byte-at-8192", "fill": "a", "length": 8192, "tail_hex": "f09f98", "expect_binary": false},
+    {"id": "invalid-at-end-of-window", "fill": "a", "length": 8192, "tail_hex": "ff", "expect_binary": true}
+  ]
+}

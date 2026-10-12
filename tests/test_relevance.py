@@ -91,9 +91,11 @@ def test_parse_strips_think_tags_before_deciding():
 
 def test_parse_ambiguous_when_both_or_neither():
     assert parse_relevance_answer("I'm not sure about this one")[0] is None
-    assert parse_relevance_answer("yes for the helper, no for the tests")[0] is None
+    # The leading token is yes. A later "no" in the reason does not flip it.
+    assert parse_relevance_answer("yes for the helper, no for the tests")[0] == "yes"
     assert parse_relevance_answer("")[0] is None
     assert parse_relevance_answer("nope")[0] is None
+    assert parse_relevance_answer("There is no doubt this file is required")[0] is None
 
 
 def test_filter_keeps_only_yes_files_and_reports_decisions():
@@ -148,15 +150,16 @@ def test_ambiguous_answer_and_errors_include_the_file():
     assert set(result.files) == {"ambiguous.py", "broken.py"}
     by_path = {d.path: d for d in result.decisions}
     assert by_path["ambiguous.py"].decision == "yes"
-    assert by_path["ambiguous.py"].error is None
-    assert "ambiguous" in by_path["ambiguous.py"].reason
+    assert by_path["ambiguous.py"].error == "malformed answer"
+    assert "malformed" in by_path["ambiguous.py"].reason
     assert by_path["broken.py"].decision == "yes"
     assert "connection reset" in by_path["broken.py"].error
     assert "connection reset" in by_path["broken.py"].reason
-    assert by_path["ambiguous.py"].failed_open is False
+    assert by_path["ambiguous.py"].failed_open is True
     assert by_path["broken.py"].failed_open is True
-    assert result.errors == [by_path["broken.py"]]
-    assert result.failed_open == [by_path["broken.py"]]
+    assert result.errors == [by_path["ambiguous.py"], by_path["broken.py"]]
+    assert result.failed_open == [by_path["ambiguous.py"], by_path["broken.py"]]
+    assert result.to_dict()["failed_open"] == 2
     summary = format_filter_summary(result)
     assert "connection reset" in summary
     assert "included by default" in summary
@@ -266,28 +269,67 @@ def test_corrupt_disk_cache_is_ignored(tmp_path):
     assert result.decisions[0].decision == "yes"
 
 
-def test_duplicate_contents_share_one_request():
+def test_same_batch_empty_unrelated_py_no_does_not_exclude_empty_src_target_py():
+    """Identical empty files are classified per path, even with the cache off."""
     calls = {"n": 0}
 
     def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
         calls["n"] += 1
         user = messages[-1]["content"]
-        assert "a.py" in user and "b.py" in user
+        if "unrelated.py" in user.split("File contents:", 1)[0]:
+            return _Response("no", prompt_tokens=4, completion_tokens=1, total_tokens=5)
         return _Response("yes", prompt_tokens=4, completion_tokens=1, total_tokens=5)
 
     result = filter_relevant(
-        {"a.py": "SAME", "b.py": "SAME"},
+        {"unrelated.py": "", "src/target.py": ""},
         "task",
         model="m",
         cache=False,
         api_key="k",
         call_llm=fake_call_llm,
     )
-    assert calls["n"] == 1
-    assert result.decisions[0].cached is False
-    assert result.decisions[1].cached is True
-    assert result.billed_tokens == 5
-    assert set(result.files) == {"a.py", "b.py"}
+    by_path = {d.path: d for d in result.decisions}
+    assert calls["n"] == 2
+    assert by_path["unrelated.py"].decision == "no"
+    assert by_path["src/target.py"].decision == "yes"
+    assert by_path["src/target.py"].cached is False
+    assert "src/target.py" in result.files
+    assert "unrelated.py" not in result.files
+    assert result.billed_tokens == 10
+
+
+def test_cross_call_empty_unrelated_py_no_does_not_exclude_empty_src_target_py():
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        user = messages[-1]["content"]
+        if "unrelated.py" in user.split("File contents:", 1)[0]:
+            return _Response("no")
+        return _Response("yes")
+
+    cache = RelevanceCache()
+    first = filter_relevant(
+        {"unrelated.py": ""},
+        "task",
+        model="m",
+        cache=cache,
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    second = filter_relevant(
+        {"src/target.py": ""},
+        "task",
+        model="m",
+        cache=cache,
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    assert first.decisions[0].decision == "no"
+    assert second.decisions[0].decision == "yes"
+    assert second.decisions[0].cached is False
+    assert "src/target.py" in second.files
+    assert calls["n"] == 2
 
 
 def test_concurrency_is_bounded_and_order_is_preserved():
@@ -647,23 +689,13 @@ class _StatusError(Exception):
         self.status_code = status_code
 
 
-def test_reasoning_models_get_budget_and_no_effort():
-    from patchling.relevance import (
-        REASONING_MAX_OUTPUT_TOKENS,
-        model_uses_reasoning,
-        output_token_budget,
-        reasoning_effort_for,
-    )
+def test_every_model_gets_1024_tokens_and_low_effort():
+    from patchling.relevance import output_token_budget, reasoning_effort_for
 
-    assert model_uses_reasoning("deepseek-reasoner")
-    assert model_uses_reasoning("openai/o1")
-    assert not model_uses_reasoning("xiaomi/mimo-v2.6-flash")
-    assert not model_uses_reasoning("gemini-2.5-flash-lite")
-    assert not model_uses_reasoning("gpt-4.1-nano")
-    assert output_token_budget("deepseek-reasoner", 256) >= REASONING_MAX_OUTPUT_TOKENS
-    assert output_token_budget("xiaomi/mimo-v2.6-flash", 256) == 256
-    assert reasoning_effort_for("deepseek-reasoner") == "none"
-    assert reasoning_effort_for("xiaomi/mimo-v2.6-flash") is None
+    assert output_token_budget("deepseek-reasoner", 1024) == 1024
+    assert output_token_budget("xiaomi/mimo-v2.6-flash", 1024) == 1024
+    assert reasoning_effort_for("deepseek-reasoner") == "low"
+    assert reasoning_effort_for("xiaomi/mimo-v2.6-flash") == "low"
 
     seen = []
 
@@ -679,13 +711,13 @@ def test_reasoning_models_get_budget_and_no_effort():
         api_key="test-key",
         call_llm=fake_call_llm,
     )
-    assert seen[0]["max_tokens"] >= REASONING_MAX_OUTPUT_TOKENS
-    assert seen[0]["reasoning_effort"] == "none"
+    assert seen[0]["max_tokens"] == 1024
+    assert seen[0]["reasoning_effort"] == "low"
     assert result.decisions[0].decision == "yes"
     assert result.decisions[0].failed_open is False
 
 
-def test_non_reasoning_default_model_keeps_the_small_budget():
+def test_non_reasoning_default_model_uses_the_shared_budget():
     seen = []
 
     def fake_call_llm(**kwargs):
@@ -700,8 +732,8 @@ def test_non_reasoning_default_model_keeps_the_small_budget():
         api_key="test-key",
         call_llm=fake_call_llm,
     )
-    assert seen[0]["max_tokens"] == 256
-    assert seen[0]["reasoning_effort"] is None
+    assert seen[0]["max_tokens"] == 1024
+    assert seen[0]["reasoning_effort"] == "low"
     assert result.decisions[0].decision == "no"
 
 
@@ -722,7 +754,7 @@ def test_rejected_reasoning_effort_is_retried_without_it():
         api_key="test-key",
         call_llm=fake_call_llm,
     )
-    assert seen == ["none", None]
+    assert seen == ["low", None]
     assert result.decisions[0].decision == "no"
     assert result.decisions[0].error is None
     assert result.failed_open == []
@@ -773,21 +805,30 @@ def test_ambiguous_answers_are_not_cached():
     first = filter_relevant(files, "task", model="fake", cache=cache, api_key="k", call_llm=fake_call_llm)
     second = filter_relevant(files, "task", model="fake", cache=cache, api_key="k", call_llm=fake_call_llm)
     assert first.decisions[0].decision == "yes"
-    assert first.decisions[0].error is None
-    assert first.decisions[0].failed_open is False
+    assert first.decisions[0].error == "malformed answer"
+    assert first.decisions[0].failed_open is True
     assert second.decisions[0].decision == "no"
     assert calls["n"] == 2
 
 
-def test_cache_key_includes_output_limit_and_prompt_version():
+def test_cache_key_includes_output_limit_prompt_version_effort_and_path():
     from patchling.relevance import PROMPT_VERSION
 
-    base = dict(model="m", task="task", content="body", variant="full")
-    low = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version=PROMPT_VERSION)
-    high = RelevanceCache.make_key(**base, max_output_tokens=4096, prompt_version=PROMPT_VERSION)
-    other = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version="9")
-    assert len({low, high, other}) == 3
-    assert "256" in low and PROMPT_VERSION in low
+    base = dict(model="m", task="task", content="body", path="a.py")
+    low = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version=PROMPT_VERSION, effort="low")
+    high = RelevanceCache.make_key(**base, max_output_tokens=1024, prompt_version=PROMPT_VERSION, effort="low")
+    other_prompt = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version="9", effort="low")
+    other_effort = RelevanceCache.make_key(**base, max_output_tokens=256, prompt_version=PROMPT_VERSION, effort="none")
+    other_path = RelevanceCache.make_key(
+        model="m", task="task", content="body", path="b.py",
+        max_output_tokens=256, prompt_version=PROMPT_VERSION, effort="low",
+    )
+    other_body = RelevanceCache.make_key(
+        model="m", task="task", content="truncated", path="a.py",
+        max_output_tokens=256, prompt_version=PROMPT_VERSION, effort="low",
+    )
+    assert len({low, high, other_prompt, other_effort, other_path, other_body}) == 6
+    assert PROMPT_VERSION == "3"
 
     calls = {"n": 0}
 
@@ -1001,3 +1042,151 @@ def test_cli_skip_generated_flags(monkeypatch):
     narrowed = _apply_relevance_filter(files, "task", Args())
     assert calls["n"] == 3
     assert [path for path, _content in narrowed] == ["uv.lock", "a.py"]
+
+
+def test_parser_quoted_answer():
+    assert parse_relevance_answer('"yes"')[0] == "yes"
+    assert parse_relevance_answer("'no'")[0] == "no"
+    assert parse_relevance_answer("**yes**")[0] == "yes"
+    assert parse_relevance_answer("`no`")[0] == "no"
+
+
+def test_parser_negated_there_is_no_doubt():
+    decision, _cleaned = parse_relevance_answer("There is no doubt this file is required")
+    assert decision is None
+
+
+def test_parser_explanatory_wording():
+    decision, _cleaned = parse_relevance_answer("This file is unrelated to the task")
+    assert decision is None
+
+
+def test_fallback_failed_open_counts_each_path():
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        return _Response("maybe", prompt_tokens=4, completion_tokens=1, total_tokens=5)
+
+    result = filter_relevant(
+        {"a.py": "SAME", "b.py": "SAME"},
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    assert [d.failed_open for d in result.decisions] == [True, True]
+    assert [d.cached for d in result.decisions] == [False, False]
+    assert result.to_dict()["failed_open"] == 2
+    assert len(result.errors) == 2
+    assert result.billed_tokens == 10
+    assert "2 failed open" in format_filter_summary(result)
+
+
+def test_cache_read_error_fails_open_without_aborting(monkeypatch):
+    monkeypatch.delenv("GPTDIFF_LLM_API_KEY", raising=False)
+    calls = {"n": 0}
+
+    class Boom(RelevanceCache):
+        def get(self, key):
+            raise OSError("read failed")
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("no")
+
+    result = filter_relevant(
+        {"a.py": "x\n", "b.py": "y\n"},
+        "task",
+        model="m",
+        cache=Boom(),
+        api_key=None,
+        call_llm=fake_call_llm,
+    )
+    assert calls["n"] == 0
+    assert len(result.failed_open) == 2
+    assert set(result.files) == {"a.py", "b.py"}
+    assert all("cache error" in d.error for d in result.decisions)
+
+
+def test_cache_write_error_does_not_abort():
+    class FlushBoom(RelevanceCache):
+        def flush(self):
+            raise OSError("write failed")
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        return _Response("no")
+
+    result = filter_relevant(
+        {"a.py": "x\n"},
+        "task",
+        model="m",
+        cache=FlushBoom(),
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    assert result.decisions[0].decision == "no"
+    assert result.decisions[0].failed_open is False
+    assert result.files == {}
+
+
+def test_skip_patterns_are_case_insensitive():
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("yes")
+
+    files = {
+        "UV.LOCK": "lock\n",
+        "dist/app.js": "x\n",
+        "pkg/__pycache__/m.pyc": "x\n",
+        "src/App.MIN.JS": "function(){}\n",
+        "src/app.py": "def keep():\n    return 1\n",
+    }
+    result = filter_relevant(files, "edit the app", model="fake", cache=False, api_key="k", call_llm=fake_call_llm)
+    assert calls["n"] == 1
+    assert list(result.files) == ["src/app.py"]
+    skipped = {d.path for d in result.decisions if d.skipped_reason == "generated"}
+    assert skipped == {"UV.LOCK", "dist/app.js", "pkg/__pycache__/m.pyc", "src/App.MIN.JS"}
+
+
+def _parity_dir() -> Path:
+    return Path(__file__).resolve().parent / "fixtures" / "parity"
+
+
+def test_parity_truncation_fixtures():
+    from patchling.relevance import truncate_utf8
+
+    payload = json.loads((_parity_dir() / "truncation.json").read_text(encoding="utf-8"))
+    for case in payload["cases"]:
+        got = truncate_utf8(case["text"], case["max_bytes"])
+        assert got == case["expected"], case["id"]
+        assert "\ufffd" not in got
+
+
+def test_parity_binary_cut_fixtures():
+    from patchling.relevance import is_binary_content
+
+    payload = json.loads((_parity_dir() / "binary.json").read_text(encoding="utf-8"))
+    for case in payload["cases"]:
+        if "hex" in case:
+            sample = bytes.fromhex(case["hex"])
+        else:
+            tail = bytes.fromhex(case["tail_hex"])
+            fill = case.get("fill", "a").encode("ascii")
+            sample = fill * (case["length"] - len(tail)) + tail
+        assert is_binary_content(sample) is case["expect_binary"], case["id"]
+
+
+def test_parity_parser_fixtures():
+    payload = json.loads((_parity_dir() / "parser.json").read_text(encoding="utf-8"))
+    for case in payload["cases"]:
+        decision, _cleaned = parse_relevance_answer(case["raw"])
+        assert decision == case["decision"], case["id"]
+
+
+def test_token_estimate_is_chars_over_4():
+    from patchling.relevance import count_tokens
+
+    assert count_tokens("") == 0
+    assert count_tokens("abcd") == 1
+    assert count_tokens("a" * 8) == 2

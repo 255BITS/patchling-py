@@ -820,7 +820,7 @@ def parse_arguments():
         help='Maximum number of relevance checks to run at once (default: 8).')
     parser.add_argument(
         '--filter-cache', type=str, default=None,
-        help='On-disk JSON cache for relevance decisions, keyed by model, task hash, and file hash.')
+        help='On-disk JSON cache for relevance decisions. The key includes prompt version, model, output-token limit, reasoning effort, task, file path, and content after truncation.')
     parser.add_argument(
         '--filter-max-bytes', type=int, default=None,
         help='Skip the relevance model for files larger than this many bytes (default: 200000; 0 disables).')
