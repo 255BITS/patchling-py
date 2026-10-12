@@ -54,7 +54,7 @@ def _leak_context(file_path, original_content, file_diff, model, api_key=None, b
 
 
 def test_harness_cases_do_not_need_the_llm(monkeypatch):
-    """Clean, sloppy, multi-file, create, and delete cases apply with no model."""
+    """Harness cases, including the hard drifted ones, apply with no model."""
     _drop_first_line.calls = []
     monkeypatch.setattr("patchling.core.call_llm_for_apply", _drop_first_line)
     for case in CASES:
@@ -185,7 +185,9 @@ def test_max_tokens_sized_to_input(monkeypatch):
         seen["max_tokens"] = max_tokens
         seen["file_diff"] = file_diff
         seen["original"] = original_content
-        return "def func1():\n    print('New func1')\n"
+        # Keep the rest of the file. A truncated rewrite is now an error, and
+        # this call also covers a padded file used to check the token budget.
+        return original_content.replace("print('Old func1')", "print('New func1')")
 
     monkeypatch.setattr("patchling.core.call_llm_for_apply", record)
     smartapply(_FUZZY, dict(_FUZZY_FILES))
@@ -208,6 +210,149 @@ def test_explicit_max_tokens_is_honored(monkeypatch):
     monkeypatch.setattr("patchling.core.call_llm_for_apply", record)
     smartapply(_FUZZY, dict(_FUZZY_FILES), max_tokens=1000)
     assert seen["max_tokens"] == 1000
+
+
+def _force_llm(monkeypatch, responder):
+    """Skip both deterministic appliers so the mocked model output is judged."""
+    monkeypatch.setattr("patchling.core.apply_patch_to_content", lambda *a, **k: None)
+    monkeypatch.setattr("patchling.core.apply_changes_only", lambda *a, **k: None)
+    monkeypatch.setattr("patchling.core.call_llm_for_apply", responder)
+
+
+def test_empty_llm_output_is_rejected(monkeypatch):
+    """Bug: gpt-5-mini returned '' for calc.py and smartapply kept it."""
+    case = next(c for c in CASES if c["id"] == "hard_moved_block")
+
+    def empty(*args, **kwargs):
+        return ""
+
+    _force_llm(monkeypatch, empty)
+    with pytest.raises(SmartApplyError, match="empty or drastically shorter"):
+        smartapply(case["diff"], dict(case["files"]))
+
+
+def test_shrunken_llm_output_is_rejected(monkeypatch):
+    """A rewrite that keeps only the edited line is not a successful apply."""
+    case = next(c for c in CASES if c["id"] == "hard_moved_block")
+
+    def shrunk(*args, **kwargs):
+        return "s += it.price * it.qty * (1 - getattr(it, 'discount', 0))\n"
+
+    _force_llm(monkeypatch, shrunk)
+    with pytest.raises(SmartApplyError, match="empty or drastically shorter"):
+        smartapply(case["diff"], dict(case["files"]))
+
+
+def test_file_deletion_is_not_treated_as_a_collapsed_rewrite(monkeypatch):
+    """Deleting a file is allowed to remove every line without an error."""
+    case = next(c for c in CASES if c["id"] == "delete_file")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("deletion must not call the model")
+
+    monkeypatch.setattr("patchling.core.call_llm_for_apply", boom)
+    updated = smartapply(case["diff"], dict(case["files"]))
+    assert "old.txt" not in updated or updated.get("old.txt") in (None, "")
+    assert "k" in updated["keep.txt"]
+
+
+def test_drifted_js_whitespace_and_semicolons_count_as_context(monkeypatch):
+    """A model that keeps every line and only drifts semicolons is accepted."""
+    case = next(c for c in CASES if c["id"] == "hard_drifted_js")
+    original = case["files"]["server.js"]
+    # Semicolons on the new lines, and a blank-line-preserving rewrite of the
+    # real file rather than the diff's `/user/:id` context.
+    inserted = (
+        "  if (!user) {\n"
+        "    return res.status(404).json({ error: 'not found' });\n"
+        "  }\n"
+    )
+    needle = "  const user = await db.find(req.params.id);\n"
+    assert needle in original
+    rewritten = original.replace(needle, needle + inserted, 1)
+
+    def respond(*args, **kwargs):
+        return rewritten
+
+    _force_llm(monkeypatch, respond)
+    updated = smartapply(case["diff"], dict(case["files"]))
+    why = _grade(case, updated)
+    assert not why, why
+
+
+def test_drifted_js_context_echo_keeps_unrelated_lines(monkeypatch):
+    """Echoing the diff's drifted route counts as context, not a foreign leak.
+
+    JS accepts this shape. Unrelated lines (the health check and listen)
+    still have to survive.
+    """
+    case = next(c for c in CASES if c["id"] == "hard_drifted_js")
+    echoed = """const express = require('express');
+const app = express();
+
+const PORT = process.env.PORT || 8080;
+
+app.use(express.json());
+
+app.get('/health', (req, res) => {
+  res.status(200).send({ ok: true, uptime: process.uptime() });
+});
+
+app.get('/user/:id', (req, res) => {
+  const user = db.find(req.params.id)
+  if (!user) {
+    return res.status(404).json({ error: 'not found' })
+  }
+  res.json(user)
+})
+
+app.listen(PORT, () => console.log(`listening on ${PORT}`));
+"""
+
+    def respond(*args, **kwargs):
+        return echoed
+
+    _force_llm(monkeypatch, respond)
+    updated = smartapply(case["diff"], dict(case["files"]))
+    text = updated["server.js"]
+    assert "uptime: process.uptime()" in text
+    assert "app.listen(PORT" in text
+    assert "404" in text
+
+
+def test_drifted_js_dropped_unrelated_lines_are_rejected(monkeypatch):
+    """The same drifted route is an error when the rest of the file is gone."""
+    case = next(c for c in CASES if c["id"] == "hard_drifted_js")
+    dropped = """app.get('/user/:id', (req, res) => {
+  const user = db.find(req.params.id)
+  if (!user) {
+    return res.status(404).json({ error: 'not found' })
+  }
+  res.json(user)
+})
+"""
+
+    def respond(*args, **kwargs):
+        return dropped
+
+    _force_llm(monkeypatch, respond)
+    with pytest.raises(SmartApplyError, match="empty or drastically shorter|additions and deletions"):
+        smartapply(case["diff"], dict(case["files"]))
+
+
+def test_renamed_fn_translation_is_accepted(monkeypatch):
+    """A model that rewrites KeyError(user_id) onto the file's `uid` is valid."""
+    case = next(c for c in CASES if c["id"] == "hard_renamed_fn")
+    original = case["files"]["svc.py"]
+    rewritten = original.replace("        return None\n", "        raise KeyError(uid)\n", 1)
+
+    def respond(*args, **kwargs):
+        return rewritten
+
+    _force_llm(monkeypatch, respond)
+    updated = smartapply(case["diff"], dict(case["files"]))
+    why = _grade(case, updated)
+    assert not why, why
 
 
 def test_sized_max_tokens_grows_with_input_and_stays_under_flat_default():

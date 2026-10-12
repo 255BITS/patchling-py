@@ -1,23 +1,173 @@
 [
-{"id":"clean_single","files":{"a.py":"def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"},
- "diff":"--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b\n+    return int(a) + int(b)\n",
- "expect":{"a.py":["return int(a) + int(b)","return a - b"]}},
-{"id":"sloppy_no_line_numbers","files":{"app.js":"function greet(name) {\n  console.log('hi ' + name);\n}\n\nfunction bye() {\n  return 'bye';\n}\n"},
- "diff":"--- a/app.js\n+++ b/app.js\n@@\n function greet(name) {\n-  console.log('hi ' + name);\n+  console.log(`hello ${name}`);\n }\n",
- "expect":{"app.js":["hello ${name}","return 'bye'"]}},
-{"id":"sloppy_wrong_context","files":{"cfg.py":"TIMEOUT = 30\nRETRIES = 3\nDEBUG = False\nNAME = 'svc'\n"},
- "diff":"--- a/cfg.py\n+++ b/cfg.py\n@@ -10,3 +10,3 @@\n TIMEOUT=30\n-RETRIES = 3\n+RETRIES = 5\n DEBUG = false\n",
- "expect":{"cfg.py":["RETRIES = 5","TIMEOUT = 30","NAME = 'svc'"]},"reject":{"cfg.py":["RETRIES = 3"]}},
-{"id":"sloppy_ellipsis","files":{"m.py":"class A:\n    def one(self):\n        return 1\n\n    def two(self):\n        return 2\n\n    def three(self):\n        return 3\n"},
- "diff":"```diff\n--- a/m.py\n+++ b/m.py\n@@ ... @@\n class A:\n     ...\n     def three(self):\n-        return 3\n+        return 33\n```\n",
- "expect":{"m.py":["return 33","return 1","return 2"]}},
-{"id":"multi_file","files":{"x.txt":"alpha\nbeta\ngamma\n","y.txt":"one\ntwo\nthree\n"},
- "diff":"--- a/x.txt\n+++ b/x.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n--- a/y.txt\n+++ b/y.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
- "expect":{"x.txt":["BETA","alpha","gamma"],"y.txt":["TWO","one","three"]}},
-{"id":"new_file","files":{"keep.txt":"k\n"},
- "diff":"--- /dev/null\n+++ b/new/hello.py\n@@ -0,0 +1,2 @@\n+def hello():\n+    return 'hi'\n",
- "expect":{"new/hello.py":["def hello():","return 'hi'"],"keep.txt":["k"]}},
-{"id":"delete_file","files":{"old.txt":"bye\nnow\n","keep.txt":"k\n"},
- "diff":"--- a/old.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-bye\n-now\n",
- "expect":{"keep.txt":["k"]},"deleted":["old.txt"]}
+ {
+  "id": "clean_single",
+  "files": {
+   "a.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+  },
+  "diff": "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b\n+    return int(a) + int(b)\n",
+  "expect": {
+   "a.py": [
+    "return int(a) + int(b)",
+    "return a - b"
+   ]
+  }
+ },
+ {
+  "id": "sloppy_no_line_numbers",
+  "files": {
+   "app.js": "function greet(name) {\n  console.log('hi ' + name);\n}\n\nfunction bye() {\n  return 'bye';\n}\n"
+  },
+  "diff": "--- a/app.js\n+++ b/app.js\n@@\n function greet(name) {\n-  console.log('hi ' + name);\n+  console.log(`hello ${name}`);\n }\n",
+  "expect": {
+   "app.js": [
+    "hello ${name}",
+    "return 'bye'"
+   ]
+  }
+ },
+ {
+  "id": "sloppy_wrong_context",
+  "files": {
+   "cfg.py": "TIMEOUT = 30\nRETRIES = 3\nDEBUG = False\nNAME = 'svc'\n"
+  },
+  "diff": "--- a/cfg.py\n+++ b/cfg.py\n@@ -10,3 +10,3 @@\n TIMEOUT=30\n-RETRIES = 3\n+RETRIES = 5\n DEBUG = false\n",
+  "expect": {
+   "cfg.py": [
+    "RETRIES = 5",
+    "TIMEOUT = 30",
+    "NAME = 'svc'"
+   ]
+  },
+  "reject": {
+   "cfg.py": [
+    "RETRIES = 3"
+   ]
+  }
+ },
+ {
+  "id": "sloppy_ellipsis",
+  "files": {
+   "m.py": "class A:\n    def one(self):\n        return 1\n\n    def two(self):\n        return 2\n\n    def three(self):\n        return 3\n"
+  },
+  "diff": "```diff\n--- a/m.py\n+++ b/m.py\n@@ ... @@\n class A:\n     ...\n     def three(self):\n-        return 3\n+        return 33\n```\n",
+  "expect": {
+   "m.py": [
+    "return 33",
+    "return 1",
+    "return 2"
+   ]
+  }
+ },
+ {
+  "id": "multi_file",
+  "files": {
+   "x.txt": "alpha\nbeta\ngamma\n",
+   "y.txt": "one\ntwo\nthree\n"
+  },
+  "diff": "--- a/x.txt\n+++ b/x.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n--- a/y.txt\n+++ b/y.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n",
+  "expect": {
+   "x.txt": [
+    "BETA",
+    "alpha",
+    "gamma"
+   ],
+   "y.txt": [
+    "TWO",
+    "one",
+    "three"
+   ]
+  }
+ },
+ {
+  "id": "new_file",
+  "files": {
+   "keep.txt": "k\n"
+  },
+  "diff": "--- /dev/null\n+++ b/new/hello.py\n@@ -0,0 +1,2 @@\n+def hello():\n+    return 'hi'\n",
+  "expect": {
+   "new/hello.py": [
+    "def hello():",
+    "return 'hi'"
+   ],
+   "keep.txt": [
+    "k"
+   ]
+  }
+ },
+ {
+  "id": "delete_file",
+  "files": {
+   "old.txt": "bye\nnow\n",
+   "keep.txt": "k\n"
+  },
+  "diff": "--- a/old.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-bye\n-now\n",
+  "expect": {
+   "keep.txt": [
+    "k"
+   ]
+  },
+  "deleted": [
+   "old.txt"
+  ]
+ },
+ {
+  "id": "hard_renamed_fn",
+  "files": {
+   "svc.py": "import logging\n\nlog = logging.getLogger(__name__)\n\n\ndef fetch_user_record(uid, db):\n    \"\"\"Load a user.\"\"\"\n    row = db.get(uid)\n    if row is None:\n        log.warning('missing %s', uid)\n        return None\n    return row\n\n\ndef keep_me():\n    return 'kept'\n"
+  },
+  "diff": "--- a/svc.py\n+++ b/svc.py\n@@ -1,6 +1,8 @@\n def get_user(user_id, database):\n     row = database.get(user_id)\n     if row is None:\n-        return None\n+        raise KeyError(user_id)\n     return row\n",
+  "expect": {
+   "svc.py": [
+    "raise KeyError(uid)",
+    "def fetch_user_record(uid, db):",
+    "log.warning('missing %s', uid)",
+    "def keep_me():",
+    "return 'kept'"
+   ]
+  },
+  "reject": {
+   "svc.py": [
+    "def get_user",
+    "database.get"
+   ]
+  }
+ },
+ {
+  "id": "hard_drifted_js",
+  "files": {
+   "server.js": "const express = require('express');\nconst app = express();\n\nconst PORT = process.env.PORT || 8080;\n\napp.use(express.json());\n\napp.get('/health', (req, res) => {\n  res.status(200).send({ ok: true, uptime: process.uptime() });\n});\n\napp.get('/users/:id', async (req, res) => {\n  const user = await db.find(req.params.id);\n  res.json(user);\n});\n\napp.listen(PORT, () => console.log(`listening on ${PORT}`));\n"
+  },
+  "diff": "--- a/server.js\n+++ b/server.js\n@@ -20,7 +20,10 @@\n app.get('/user/:id', (req, res) => {\n   const user = db.find(req.params.id)\n+  if (!user) {\n+    return res.status(404).json({ error: 'not found' })\n+  }\n   res.json(user)\n })\n",
+  "expect": {
+   "server.js": [
+    "404",
+    "not found",
+    "await db.find(req.params.id)",
+    "/users/:id",
+    "uptime: process.uptime()",
+    "app.listen(PORT"
+   ]
+  },
+  "reject": {
+   "server.js": [
+    "'/user/:id'"
+   ]
+  }
+ },
+ {
+  "id": "hard_moved_block",
+  "files": {
+   "calc.py": "class Calc:\n    def __init__(self, precision=2):\n        self.precision = precision\n        self.history = []\n\n    def total(self, items):\n        s = 0.0\n        for it in items:\n            s += it.price * it.qty\n        self.history.append(s)\n        return round(s, self.precision)\n\n    def clear(self):\n        self.history = []\n"
+  },
+  "diff": "--- a/calc.py\n+++ b/calc.py\n@@ -40,6 +40,6 @@\n def total(items):\n     s = 0\n     for it in items:\n-        s += it.price * it.qty\n+        s += it.price * it.qty * (1 - getattr(it, 'discount', 0))\n     return s\n",
+  "expect": {
+   "calc.py": [
+    "(1 - getattr(it, 'discount', 0))",
+    "self.history.append(s)",
+    "round(s, self.precision)",
+    "def clear(self):",
+    "s = 0.0"
+   ]
+  }
+ }
 ]

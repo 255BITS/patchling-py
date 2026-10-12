@@ -30,6 +30,7 @@ from .applydiff import (
     apply_patch_to_content,
     apply_changes_only,
     llm_output_respects_diff,
+    output_collapsed,
 )
 
 VERBOSE = False
@@ -571,8 +572,11 @@ def smartapply(diff_text, files, model=None, api_key=None, base_url=None, max_to
         APIError: If LLM API calls fail (timeouts, HTTP 402, auth). The
             original exception propagates; it is not swallowed and the
             original file is not returned in its place.
-        SmartApplyError: If the model rewrites lines other than the diff's
-            additions and deletions.
+        SmartApplyError: If the model returns an empty or drastically
+            shorter file (unless the diff deletes that file), or rewrites
+            lines other than the diff's additions and deletions. Whitespace,
+            trailing semicolons, and trivially drifted context still count
+            as the original line.
 
     Example:
         >>> original = {"file.py": "def old():\n    pass"}
@@ -628,6 +632,10 @@ def smartapply(diff_text, files, model=None, api_key=None, base_url=None, max_to
                 api_key=api_key, base_url=base_url, max_tokens=max_tokens,
             )
             cleaned = strip_bad_output(updated, original)
+            if output_collapsed(original, cleaned, patch):
+                raise SmartApplyError(
+                    f"LLM output for {path} is empty or drastically shorter than the file"
+                )
             if not llm_output_respects_diff(original, cleaned, patch):
                 raise SmartApplyError(
                     f"LLM output for {path} changed lines other than the diff's "
