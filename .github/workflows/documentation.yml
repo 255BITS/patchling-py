@@ -3,7 +3,18 @@ name: Deploy Documentation
 on:
   push:
     branches:
-      - main  # Adjust if needed
+      - main
+  workflow_dispatch:
+
+# Run 28758499337 (2026-07-05, "Bump version: 0.8.0 → 0.8.1") built the site
+# and uploaded the artifact, then failed in "Deploy to GitHub Pages". That
+# push landed three minutes after another successful Pages deploy, which is
+# the usual "deployment already in progress" rejection from the Pages API.
+# Queue deploys instead of overlapping them, and retry once if Pages is still
+# finishing the previous deployment after this workflow starts.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -13,27 +24,45 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install mkdocs-material
+        run: python -m pip install "mkdocs-material==9.6.22"
 
       - name: Build site
-        run: mkdocs build --site-dir public  # Ensure output is in 'public'
+        run: mkdocs build --strict --site-dir public
 
       - name: Ensure CNAME is set
-        run: echo "gptdiff.255labs.xyz" > public/CNAME  # Correct location
+        run: echo "gptdiff.255labs.xyz" > public/CNAME
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
-          path: public  # This must match the correct output directory
+          path: public
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+        id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
 
+      - name: Wait for an in-progress Pages deployment to finish
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Retry Deploy to GitHub Pages
+        id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v5

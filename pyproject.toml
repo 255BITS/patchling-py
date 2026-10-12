@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patchling"
+dynamic = ["version"]
+description = "Natural-language code transformation as a library: generate unified diffs with LLMs and apply them resiliently with smartapply. Formerly gptdiff."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "255labs" }]
+keywords = [
+    "patchling",
+    "smartapply",
+    "llm",
+    "diff",
+    "unified-diff",
+    "patch",
+    "code-transformation",
+    "ai",
+    "codegen",
+    "gptdiff",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "tiktoken>=0.5.0",
+    "ai-agent-toolbox>=0.2.0,<1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-mock"]
+docs = ["mkdocs", "mkdocs-material"]
+
+[project.urls]
+Homepage = "https://github.com/255BITS/patchling-py"
+Documentation = "https://255bits.github.io/patchling-py"
+Source = "https://github.com/255BITS/patchling-py"
+"Browser/Node runtime (npm)" = "https://www.npmjs.com/package/patchling"
+"Built with patchling (nanoodle)" = "https://nanoodle.com"
+
+[project.scripts]
+patchling = "patchling.core:main"
+patchling-apply = "patchling.gptpatch:main"
+gptdiff = "patchling.core:main"
+gptpatch = "patchling.gptpatch:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "patchling.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["patchling*"]
+
+[tool.setuptools.package-data]
+patchling = ["py.typed"]

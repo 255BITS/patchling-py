@@ -52,13 +52,17 @@ def test_smartapply_file_modification():
         assert original_hello != updated_files["hello.py"]
 
 def test_smartapply_think_then_modify():
-    """Test that smartapply correctly handles file modification diffs"""
+    """Test that smartapply strips think tags from an LLM rewrite.
+
+    The hunk context does not match the file, so the deterministic appliers
+    decline and the LLM path (including think-tag stripping) still runs.
+    """
     diff_text = '''diff --git a/hello.py b/hello.py
 --- a/hello.py
 +++ b/hello.py
 @@ -1,2 +1,5 @@
- def hello():
-     print('Hello')
+ def hello_mismatch():
+-    print('missing')
 +
 +def goodbye():
 +    print('Goodbye')'''

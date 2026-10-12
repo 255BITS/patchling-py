@@ -22,6 +22,13 @@ Files matching .gitignore pattern or <b>.gptignore</b> patterns are ignored when
 patchling "Add null safety checks" --apply src/
 ```
 
+`--apply` may sit before, between, or after the file arguments:
+
+```bash
+patchling "Add null safety checks" src/app.js --apply
+patchling "Add null safety checks" src/a.js --apply src/b.js
+```
+
 `--call`  
 **Generate diff without applying**  
 *Example:*  
@@ -55,7 +62,7 @@ patchling "Refactor legacy API" --temperature 0.3
 
 ### Model Selection
 `--model`
-**Choose LLM model (default: $GPTDIFF_MODEL or 'gemini-3-pro-preview')**
+**Choose LLM model (default: $GPTDIFF_MODEL or `deepseek-reasoner`, which is `DEFAULT_MODEL`)**
 *Options:* `gemini-3-pro-preview` (recommended), `gpt-4o` (complex), `gemini-2.0-flash` (fast)
 *Example:*
 ```bash
@@ -86,7 +93,7 @@ patchling "Remove deprecated features" --nobeep
 Patchling uses the following environment variables:
 - `GPTDIFF_LLM_API_KEY`: API key for the LLM service
 - `GPTDIFF_LLM_BASE_URL`: Base URL for the LLM API (default: https://nano-gpt.com/api/v1/)
-- `GPTDIFF_MODEL`: Default model for generating diffs (default: gemini-3-pro-preview)
+- `GPTDIFF_MODEL`: Default model for generating diffs (default: `deepseek-reasoner`, exported as `DEFAULT_MODEL`)
 
 For the smartapply feature, you can set separate variables:
 - `GPTDIFF_SMARTAPPLY_MODEL`: Model for smartapply (recommended: `gpt5-mini`, fast and reliable for applying diffs; defaults to `GPTDIFF_MODEL` if not set)

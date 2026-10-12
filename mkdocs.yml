@@ -46,3 +46,4 @@ extra:
       icon: fontawesome/solid/globe
       link: https://255labs.xyz
 plugins:
+  - search
