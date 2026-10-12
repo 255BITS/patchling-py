@@ -3,7 +3,7 @@
 > **Patchling everywhere:** this library also ships for browser and Node as [patchling](https://github.com/255BITS/patchling) — see it running live in [nanoodle.com](https://nanoodle.com), a no-server visual AI workflow editor built on it.
 
 ## Prerequisites
-- Python 3.8 or higher
+- Python 3.10 or higher
 
 ## Install via pip
 
@@ -20,9 +20,11 @@ If the `patchling` package is not yet available on PyPI, you can install it from
 
 ```bash
 git clone https://github.com/255BITS/patchling-py.git
-cd patchling
-python setup.py install
+cd patchling-py
+python -m pip install -e '.[test]'
 ```
+
+Package metadata lives in `pyproject.toml`. The version is read from `patchling.__version__` (currently 0.8.1). `setup.py` is only a shim for older install commands.
 
 ## Configuration
 
