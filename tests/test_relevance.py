@@ -1,5 +1,6 @@
 """Mocked unit tests for the opt-in relevance filter. No network."""
 
+import hashlib
 import json
 import sys
 import threading
@@ -946,14 +947,15 @@ def test_lockfiles_and_generated_files_are_skipped_by_default():
         "yarn.lock": "# yarn\n",
         "poetry.lock": "# poetry\n",
         "src/app.min.js": "function(){}\n",
+        "src/app.min.mjs": "export default 1\n",
         "src/app.py": "def keep():\n    return 1\n",
     }
     result = filter_relevant(files, "edit the app", model="fake", cache=False, api_key="k", call_llm=fake_call_llm)
     assert calls["n"] == 1
     by_path = {d.path: d for d in result.decisions}
-    for path in ("uv.lock", "package-lock.json", "yarn.lock", "poetry.lock", "src/app.min.js"):
+    for path in ("uv.lock", "package-lock.json", "yarn.lock", "poetry.lock", "src/app.min.js", "src/app.min.mjs"):
         assert by_path[path].decision == "no"
-        assert by_path[path].skipped_reason == "generated"
+        assert by_path[path].skipped_reason == "ignored"
         assert path not in result.files
     assert "src/app.py" in result.files
 
@@ -983,7 +985,7 @@ def test_skip_patterns_are_configurable():
         call_llm=fake_call_llm,
     )
     by_path = {d.path: d for d in custom.decisions}
-    assert by_path["notes.tmp"].skipped_reason == "generated"
+    assert by_path["notes.tmp"].skipped_reason == "ignored"
     assert by_path["notes.tmp"].decision == "no"
     assert by_path["uv.lock"].decision == "yes"
     assert calls["n"] == 2
@@ -1081,8 +1083,7 @@ def test_fallback_failed_open_counts_each_path():
     assert "2 failed open" in format_filter_summary(result)
 
 
-def test_cache_read_error_fails_open_without_aborting(monkeypatch):
-    monkeypatch.delenv("GPTDIFF_LLM_API_KEY", raising=False)
+def test_cache_read_error_is_a_miss_and_calls_the_model():
     calls = {"n": 0}
 
     class Boom(RelevanceCache):
@@ -1098,13 +1099,13 @@ def test_cache_read_error_fails_open_without_aborting(monkeypatch):
         "task",
         model="m",
         cache=Boom(),
-        api_key=None,
+        api_key="k",
         call_llm=fake_call_llm,
     )
-    assert calls["n"] == 0
-    assert len(result.failed_open) == 2
-    assert set(result.files) == {"a.py", "b.py"}
-    assert all("cache error" in d.error for d in result.decisions)
+    assert calls["n"] == 2
+    assert result.failed_open == []
+    assert result.files == {}
+    assert [d.decision for d in result.decisions] == ["no", "no"]
 
 
 def test_cache_write_error_does_not_abort():
@@ -1140,13 +1141,14 @@ def test_skip_patterns_are_case_insensitive():
         "dist/app.js": "x\n",
         "pkg/__pycache__/m.pyc": "x\n",
         "src/App.MIN.JS": "function(){}\n",
+        "src/App.MIN.MJS": "export default 1\n",
         "src/app.py": "def keep():\n    return 1\n",
     }
     result = filter_relevant(files, "edit the app", model="fake", cache=False, api_key="k", call_llm=fake_call_llm)
     assert calls["n"] == 1
     assert list(result.files) == ["src/app.py"]
-    skipped = {d.path for d in result.decisions if d.skipped_reason == "generated"}
-    assert skipped == {"UV.LOCK", "dist/app.js", "pkg/__pycache__/m.pyc", "src/App.MIN.JS"}
+    skipped = {d.path for d in result.decisions if d.skipped_reason == "ignored"}
+    assert skipped == {"UV.LOCK", "dist/app.js", "pkg/__pycache__/m.pyc", "src/App.MIN.JS", "src/App.MIN.MJS"}
 
 
 def _parity_dir() -> Path:
@@ -1184,9 +1186,446 @@ def test_parity_parser_fixtures():
         assert decision == case["decision"], case["id"]
 
 
-def test_token_estimate_is_chars_over_4():
-    from patchling.relevance import count_tokens
+def test_token_estimate_is_ceil_code_points_over_4():
+    from patchling.relevance import count_tokens, _truncate_text
 
     assert count_tokens("") == 0
     assert count_tokens("abcd") == 1
+    assert count_tokens("abcde") == 2
     assert count_tokens("a" * 8) == 2
+    assert count_tokens("abc😀def") == 2
+    assert count_tokens("中文测试") == 1
+    assert count_tokens("e\u0301") == 1
+    assert _truncate_text("abc😀def", None, 1, None) == "abc😀"
+    assert _truncate_text("中文测试啊", None, 1, None) == "中文测试"
+    # Combining mark is its own code point, so the cap can split a grapheme.
+    marked = "a" + "\u0301" * 5
+    assert _truncate_text(marked, None, 1, None) == "a" + "\u0301" * 3
+    assert _truncate_text("éX", 1, None, None) == ""
+    assert _truncate_text("€X", 2, None, None) == ""
+    assert _truncate_text("😀X", 3, None, None) == ""
+
+
+def test_parser_wrappers_and_terminators():
+    assert parse_relevance_answer("__yes__")[0] == "yes"
+    assert parse_relevance_answer("\u201cno\u201d")[0] == "no"
+    assert parse_relevance_answer("\u2018yes\u2019")[0] == "yes"
+    assert parse_relevance_answer("yes)")[0] == "yes"
+    assert parse_relevance_answer("no!")[0] == "no"
+    assert parse_relevance_answer("yes?")[0] is None
+    assert parse_relevance_answer("```python\nyes\n```")[0] == "yes"
+    assert parse_relevance_answer("**yes**, because it is")[0] == "yes"
+
+
+def test_full_and_truncated_abc_do_not_share_a_key():
+    full = RelevanceCache.make_key(
+        model="m", task="task", content="abc", path="a.py", mode="full", note=""
+    )
+    note = (
+        "Note: this file was truncated to fit the relevance check "
+        "(6 bytes, 2 tokens). Judge from the portion shown."
+    )
+    truncated = RelevanceCache.make_key(
+        model="m", task="task", content="abc", path="a.py", mode="truncated", note=note
+    )
+    assert full != truncated
+
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        return _Response("no")
+
+    cache = RelevanceCache()
+    kwargs = dict(model="m", cache=cache, api_key="k", call_llm=fake_call_llm, max_tokens=None)
+    filter_relevant({"a.py": "abc"}, "task", **kwargs)
+    filter_relevant(
+        {"a.py": "abcdef"}, "task", max_bytes=3, on_oversize="truncate", **kwargs
+    )
+    assert calls["n"] == 2
+
+
+def test_rejected_effort_is_cached_under_the_empty_key():
+    from patchling.relevance import PROMPT_VERSION
+
+    seen = []
+
+    def fake_call_llm(**kwargs):
+        seen.append(kwargs.get("reasoning_effort"))
+        if kwargs.get("reasoning_effort"):
+            raise _StatusError("400 invalid reasoning_effort: unsupported", 400)
+        return _Response("no")
+
+    cache = RelevanceCache()
+    files = {"a.py": "x = 1\n"}
+    kwargs = dict(model="m", cache=cache, api_key="k", call_llm=fake_call_llm)
+    first = filter_relevant(files, "task", **kwargs)
+    second = filter_relevant(files, "task", **kwargs)
+    assert seen == ["low", None]
+    assert first.decisions[0].cached is False
+    assert second.decisions[0].cached is True
+    assert second.decisions[0].decision == "no"
+    common = dict(
+        model="m",
+        task="task",
+        content="x = 1\n",
+        path="a.py",
+        max_output_tokens=1024,
+        prompt_version=PROMPT_VERSION,
+        mode="full",
+        note="",
+    )
+    low = RelevanceCache.make_key(**common, effort="low")
+    omitted = RelevanceCache.make_key(**common, effort="")
+    assert cache.get(low) is None
+    assert cache.get(omitted)["decision"] == "no"
+
+
+def test_valid_utf8_bytes_are_decoded_and_do_not_share_a_path_key():
+    bodies = []
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        bodies.append(_file_body(messages))
+        return _Response("yes" if len(bodies) == 1 else "no")
+
+    cache = RelevanceCache()
+    kwargs = dict(model="m", cache=cache, api_key="k", call_llm=fake_call_llm)
+    first = filter_relevant({"a.py": "alpha".encode()}, "task", **kwargs)
+    second = filter_relevant({"a.py": "beta".encode()}, "task", **kwargs)
+    assert first.files["a.py"] == "alpha"
+    assert first.files["a.py"] != ""
+    assert "alpha" in bodies[0]
+    assert "beta" in bodies[1]
+    assert second.decisions[0].cached is False
+    assert second.decisions[0].decision == "no"
+    assert second.files == {}
+
+    invalid = filter_relevant(
+        {"a.py": b"\xff\xfe"},
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        on_binary="exclude",
+        call_llm=fake_call_llm,
+    )
+    assert invalid.decisions[0].skipped_reason == "binary"
+    assert invalid.files == {}
+    assert len(bodies) == 2
+
+
+def test_envelope_errors_fail_open_and_are_not_cached():
+    payloads = [
+        {"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": {}}]},
+        "this is not json",
+        None,
+    ]
+    for payload in payloads:
+        calls = {"n": 0}
+
+        def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None, payload=payload):
+            calls["n"] += 1
+            return payload
+
+        cache = RelevanceCache()
+        result = filter_relevant(
+            {"a.py": "x\n"},
+            "task",
+            model="m",
+            cache=cache,
+            api_key="k",
+            call_llm=fake_call_llm,
+        )
+        assert calls["n"] == 1, payload
+        decision = result.decisions[0]
+        assert decision.failed_open is True, payload
+        assert decision.cached is False
+        assert decision.decision == "yes"
+        assert "a.py" in result.files
+        assert "malformed response" in (decision.error or "")
+        again = filter_relevant(
+            {"a.py": "x\n"},
+            "task",
+            model="m",
+            cache=cache,
+            api_key="k",
+            call_llm=fake_call_llm,
+        )
+        assert again.decisions[0].cached is False
+        assert calls["n"] == 2
+
+
+def test_call_llm_ordinary_call_is_made_once(monkeypatch):
+    from patchling.core import call_llm
+
+    calls = {"n": 0}
+
+    class Completions:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            assert "reasoning_effort" not in kwargs
+            return {"ok": True}
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.chat = Chat()
+
+    monkeypatch.setattr("patchling.core.OpenAI", Client)
+    assert call_llm("k", "https://example.test/v1", "m", [], 16, 0.0) == {"ok": True}
+    assert calls["n"] == 1
+
+
+def test_call_llm_generic_type_error_is_not_retried(monkeypatch):
+    from patchling.core import call_llm
+
+    calls = {"n": 0}
+
+    class Completions:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            raise TypeError("boom")
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.chat = Chat()
+
+    monkeypatch.setattr("patchling.core.OpenAI", Client)
+    with pytest.raises(TypeError, match="boom"):
+        call_llm("k", "https://example.test/v1", "m", [], 16, 0.0, reasoning_effort="low")
+    assert calls["n"] == 1
+    calls["n"] = 0
+    with pytest.raises(TypeError, match="boom"):
+        call_llm("k", "https://example.test/v1", "m", [], 16, 0.0)
+    assert calls["n"] == 1
+
+
+def test_call_llm_retries_only_unsupported_reasoning_effort(monkeypatch):
+    from patchling.core import call_llm
+
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs.get("reasoning_effort", None))
+            if "reasoning_effort" in kwargs:
+                raise TypeError("unexpected keyword argument 'reasoning_effort'")
+            return {"ok": True}
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.chat = Chat()
+
+    monkeypatch.setattr("patchling.core.OpenAI", Client)
+    assert call_llm(
+        "k", "https://example.test/v1", "m", [], 16, 0.0, reasoning_effort="low"
+    ) == {"ok": True}
+    assert calls == ["low", None]
+
+
+def test_cli_apply_uses_the_full_original_file_map(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "keep.py").write_text("KEEP_ON_DISK\n")
+    (project / "drop.py").write_text("DROP_ON_DISK\n")
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("GPTDIFF_LLM_API_KEY", "test-key")
+
+    loaded = {
+        str(project / "keep.py"): "def keep():\n    return 'KEEP_MAP'\n",
+        str(project / "drop.py"): "DROP_MAP\n",
+    }
+
+    def fake_load(project_dir, cwd):
+        return [(path, content) for path, content in loaded.items()]
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        return _answer_for(messages, "no — unrelated")
+
+    captured = {}
+
+    def fake_for_diff(system_prompt, user_prompt, files_content, model, **kwargs):
+        captured["files_content"] = files_content
+        diff = (
+            "diff --git a/drop.py b/drop.py\n"
+            "--- a/drop.py\n"
+            "+++ b/drop.py\n"
+            "@@ -1 +1 @@\n"
+            "-DROP_MAP\n"
+            "+DROP_NEW\n"
+        )
+        return "full", diff, 1, 1, 2
+
+    def fake_apply(file_path, original_content, file_diff, model, api_key=None, base_url=None, extra_prompt=None, max_tokens=None):
+        captured["original"] = original_content
+        captured["path"] = file_path
+        return "applied\n"
+
+    monkeypatch.setattr("patchling.core.load_project_files", fake_load)
+    monkeypatch.setattr("patchling.core.call_llm", fake_call_llm)
+    monkeypatch.setattr("patchling.core.call_llm_for_diff", fake_for_diff)
+    monkeypatch.setattr(
+        "patchling.core.call_llm_for_apply_with_think_tool_available", fake_apply
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["patchling", "update keep", "--filter-relevant", "--filter-model", "fake", "--apply", "--nobeep", "--nowarn"],
+    )
+    main()
+    assert "KEEP_MAP" in captured["files_content"]
+    assert "DROP_MAP" not in captured["files_content"]
+    assert captured["path"] == "drop.py"
+    assert captured["original"] == "DROP_MAP\n"
+
+
+# sha256 of tests/fixtures/parity/relevance.json. That file is a byte-identical
+# copy of test/fixtures/parity/relevance.json on 255BITS/patchling branch
+# cursor/relevance-filter-915b. A mismatch fails CI.
+RELEVANCE_FIXTURE_SHA256 = "90b7299375518fbc6cb9bfeacb536f46f95c17ed72f8f66d063592bfdaec4665"
+
+
+def test_vendored_relevance_fixture_matches_library():
+    """Run the shared fixture against the real key, parser, truncation, and skip list."""
+    from patchling.relevance import (
+        DEFAULT_SKIP_PATTERNS,
+        PROMPT_VERSION,
+        _SYSTEM_PROMPT,
+        _build_user_prompt,
+        _truncate_text,
+        count_tokens,
+        is_binary_content,
+        path_is_skipped,
+        truncate_utf8,
+    )
+
+    path = _parity_dir() / "relevance.json"
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    assert digest == RELEVANCE_FIXTURE_SHA256
+    data = json.loads(raw.decode("utf-8"))
+
+    assert str(data["promptVersion"]) == PROMPT_VERSION
+    assert data["systemPrompt"] == _SYSTEM_PROMPT
+
+    prompts = data.get("userPrompt") or {}
+    if "withoutNote" in prompts:
+        got = _build_user_prompt("TASK", "PATH", "BODY", None)
+        expected = (
+            prompts["withoutNote"]
+            .replace("{task}", "TASK")
+            .replace("{intent}", "TASK")
+            .replace("{path}", "PATH")
+            .replace("{content}", "BODY")
+        )
+        assert got == expected
+    if "withNote" in prompts:
+        got = _build_user_prompt("TASK", "PATH", "BODY", "NOTE")
+        expected = (
+            prompts["withNote"]
+            .replace("{task}", "TASK")
+            .replace("{intent}", "TASK")
+            .replace("{path}", "PATH")
+            .replace("{note}", "NOTE")
+            .replace("{content}", "BODY")
+        )
+        assert got == expected
+
+    for example in (data.get("tokenEstimate") or {}).get("examples") or []:
+        assert count_tokens(example["text"]) == example["tokens"], example
+
+    for vector in data["cacheKey"]["vectors"]:
+        limit = vector.get(
+            "max_output_tokens",
+            vector.get("tokenLimit", vector.get("maxOutputTokens")),
+        )
+        if "effort_sent" in vector:
+            effort = vector["effort_sent"]
+        elif "effort" in vector:
+            effort = vector["effort"]
+        else:
+            effort = ""
+        got = RelevanceCache.make_key(
+            model=vector["model"],
+            task=vector.get("task", vector.get("intent")),
+            content=vector["content"],
+            path=vector["path"],
+            max_output_tokens=int(limit),
+            prompt_version=str(vector.get("prompt_version", vector.get("promptVersion"))),
+            effort=effort,
+            mode=vector.get("mode") or "full",
+            note=vector.get("note") or "",
+        )
+        assert got == vector["sha256"], vector
+
+    for case in data["parser"]:
+        decision, _cleaned = parse_relevance_answer(case["raw"])
+        assert decision == case["decision"], case
+
+    truncation = list(data.get("truncation") or [])
+    if isinstance(data.get("truncation"), dict):
+        truncation = list(data["truncation"].get("cases") or [])
+    truncation.extend(data.get("tokenTruncation") or [])
+    for case in truncation:
+        if "maxTokens" in case:
+            got = _truncate_text(case["text"], case.get("maxBytes"), case["maxTokens"], None)
+        else:
+            got = truncate_utf8(case["text"], case["maxBytes"])
+        assert got == case["expected"], case
+        assert "\ufffd" not in got
+
+    byte_cases = data.get("bytes") or {}
+    if byte_cases.get("validUtf8"):
+        from patchling.relevance import _prepare_content
+
+        sample = byte_cases["validUtf8"].encode("utf-8")
+        binary, text = _prepare_content(sample)
+        assert binary is False
+        assert text == byte_cases["validUtf8"]
+        assert text != ""
+    changed = byte_cases.get("changed") or []
+    if len(changed) >= 2:
+        from patchling.relevance import _prepare_content
+
+        keys = []
+        for text in changed:
+            binary, decoded = _prepare_content(text.encode("utf-8"))
+            assert binary is False
+            assert decoded == text and decoded != ""
+            keys.append(
+                RelevanceCache.make_key(
+                    model="m",
+                    task="task",
+                    content=decoded,
+                    path="a.py",
+                    mode="full",
+                    note="",
+                )
+            )
+        assert len(set(keys)) == len(changed)
+
+    binary = data.get("binary") or {}
+    for case in binary.get("cases") or []:
+        if "hex" in case:
+            sample = bytes.fromhex(case["hex"])
+        else:
+            tail = bytes(case["tail"])
+            sample = b"a" * case["pad"] + tail
+        expect = case.get("binary", case.get("expect_binary"))
+        assert is_binary_content(sample) is expect, case
+
+    ignore = data["ignore"]
+    assert list(DEFAULT_SKIP_PATTERNS) == list(ignore["patterns"])
+    for example in ignore["examples"]:
+        assert path_is_skipped(example["path"], ignore["patterns"]) is example["ignored"], example

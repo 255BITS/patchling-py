@@ -96,15 +96,15 @@ patchling "Rename the helper" --filter-relevant --filter-model xiaomi/mimo-v2.6-
 | `--filter-relevant` | Turn the filter on |
 | `--filter-model` | Model for the yes/no checks |
 | `--filter-concurrency` | How many checks run at once (default 8) |
-| `--filter-cache PATH` | JSON cache. The key hashes prompt version, model, output-token limit, reasoning effort, task, file path, and content after truncation |
+| `--filter-cache PATH` | JSON cache. The key hashes prompt version, model, output-token limit, the effort actually sent, task, path, mode, preview note, and the body sent |
 | `--filter-max-bytes` / `--filter-max-tokens` | Threshold past which a file is not sent in full (defaults 200000 bytes and 12000 tokens; `0` disables) |
 | `--filter-oversize` | `include`, `exclude`, or `truncate` (default `truncate`) |
 | `--filter-binary` | `include`, `exclude`, or `truncate` (default `exclude`) |
-| `--filter-skip-pattern GLOB` | Also skip this glob (repeatable). Defaults are case-insensitive and include lockfiles, `dist/`, `*.min.js`, and `*.pyc` |
-| `--filter-no-skip-generated` | Send lockfiles and generated files to the relevance model |
+| `--filter-skip-pattern GLOB` | Also skip this glob (repeatable). Defaults are case-insensitive and include lockfiles, `dist/`, `*.min.js`, `*.min.mjs`, and `*.pyc` |
+| `--filter-no-skip-generated` | Send lockfiles and generated files to the relevance model. A skipped file's reason is `ignored` |
 | `--filter-decisions PATH` | Write every per-file decision as JSON |
 
-A leading `yes` or `no` is the decision. Anything else (including an empty answer, a negated sentence such as "There is no doubt…", or explanatory wording) keeps the file, marks it failed open, and is not cached. The summary counts every such file, one per path. Timeouts and 5xx responses are retried first. A cache read error fails that file open; a cache write error does not stop the run. `--verbose` prints each decision. The library call is `filter_relevant` (JS: `filterRelevant`). The canonical skip list and the parity fixtures are in the [API reference](api.md) and `tests/fixtures/parity/`. A benchmark that scores a hand-labeled file list lives at `bench/relevance/`.
+A leading `yes` or `no` is the decision. Anything else (including an empty answer, a negated sentence such as "There is no doubt…", or explanatory wording) keeps the file, marks it failed open, and is not cached. The summary counts every such file, one per path. Timeouts and 5xx responses are retried first. A cache read error is treated as a miss and the model is called; a cache write error does not stop the run. `--apply` patches the full original file map, including files the filter left out of the prompt. `--verbose` prints each decision. The library call is `filter_relevant` (JS: `filterRelevant`). The canonical skip list and the parity fixture are in the [API reference](api.md) and `tests/fixtures/parity/relevance.json`. A benchmark that scores a hand-labeled file list lives at `bench/relevance/`.
 
 `--nobeep`  
 **Silence completion alerts**  

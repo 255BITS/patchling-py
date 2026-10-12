@@ -206,22 +206,23 @@ def filter_relevant(
 
 Opt-in relevance filter for large directories, and the Python counterpart of the JS library's `filterRelevant`. For each file, the full contents and the task are sent to a cheap OpenAI-compatible model (same `GPTDIFF_LLM_API_KEY` / `GPTDIFF_LLM_BASE_URL` resolution as `generate_diff`). The model is asked whether the file is relevant. Only `yes` files are returned in `result.files` for `generate_diff` and `smartapply`. The default model is `xiaomi/mimo-v2.6-flash`. A pallets/flask pass reported recall 1.0 and about 0.8x the token overhead of the next model tried. Those figures are **UNVERIFIED**.
 
-`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, `truncated`, or `generated`), `error` when that file's call failed or the answer was empty or malformed, and `failed_open` for those includes. `result.failed_open` lists them; `result.to_dict()` counts them. Malformed answers are failed open too, so the count matches the number of fallbacks.
+`result.decisions` has one record per input file: `path`, `decision` (`yes` or `no`), `reason`, `raw` (the model text), `tokens`, `cached`, `skipped_reason` (`binary`, `oversize`, `truncated`, or `ignored`), `error` when that file's call failed or the answer was empty or malformed, and `failed_open` for those includes. `result.failed_open` lists them; `result.to_dict()` counts them. Malformed answers are failed open too, so the count matches the number of fallbacks.
 
 ### Shared contract (prompt v3)
 
 Python and the JS library use the same rules:
 
 - Prompt version `3`. The system prompt is the relevance-filter paragraph in `patchling/relevance.py` (`_SYSTEM_PROMPT`). The user message is the task (intent), one file path, an optional truncation note, and the file contents.
-- Every call requests `max_tokens=1024` and `reasoning_effort="low"`. A 4xx that names `reasoning_effort` is retried once without the parameter.
+- Every call requests `max_tokens=1024` and `reasoning_effort="low"`. A 4xx that names `reasoning_effort` is retried once without the parameter. The decision is cached under the effort that was actually sent (`low`, or empty when the retry omitted it). A later lookup tries the `low` key first, then the empty-effort key.
 - Timeouts, HTTP 5xx, and billing-reservation errors are retried with backoff, then the file fails open.
-- The cache key is the SHA-256 of these fields joined by NUL: prompt version, model, output-token limit, reasoning effort, intent, **file path**, and the content **after truncation**. Decisions are per path. Identical contents at two paths are two calls, even when the cache is off.
-- The decision is the leading standalone `yes` or `no` after whitespace, quotes, markdown bold, backticks, and an `Answer:` or `Decision:` prefix. `<think>` blocks are stripped first. Anything else is malformed: `failed_open=true`, the file is included, and the decision is not cached.
-- A cache read error fails that file open and is logged. A cache write error is logged and does not abort the run.
-- Binary detection decodes the first 8192 bytes as UTF-8 and tolerates only an incomplete trailing sequence of at most 3 bytes. A NUL or any other invalid byte is binary.
-- Truncation cuts on a Unicode code-point boundary and never emits U+FFFD. Fixtures for 2-byte, 3-byte, and 4-byte characters live in `tests/fixtures/parity/`.
-- The token estimate is characters divided by 4 (empty text is 0; any other text is at least 1). tiktoken is not used for this check.
-- Skip globs are case-insensitive. `**` crosses directories and `*` does not. `skipped_reason` for a skip is `generated`.
+- The cache key is the SHA-256 of length-prefixed UTF-8 fields. Each field is `<utf-8 byte length>:<bytes>` followed by a newline, in order: prompt version, model, output-token limit, effort sent, task, **file path**, mode (`full`, `truncated`, or `binary`), the preview note (empty when there is none), and the **exact body sent**. A full file whose text is `abc` does not share a key with a truncated preview that is also `abc`. Decisions are per path. Identical contents at two paths are two calls, even when the cache is off.
+- The decision is the leading token after whitespace, one `<think>` block, one code fence, markdown `**` / `__` / backticks, straight or curly quotes, and an optional `Answer:` or `Decision:` prefix. That token must be exactly `yes` or `no`, then the end of the string, whitespace, or one of `. , ! : ; )`. Anything else is malformed: `failed_open=true`, the file is included, and the decision is not cached.
+- A missing `choices` list, an empty list, a missing message or content field, and a non-JSON body are failed open inside that same handling and are not cached.
+- A cache read error is a miss: the model is called normally and the run does not abort. A cache write error is logged and does not abort the run.
+- Valid UTF-8 bytes are decoded to text and are not replaced with an empty string. Invalid UTF-8 takes the binary path. Binary detection of a `str`, and the shared 8192-byte window, decodes as UTF-8 and tolerates only an incomplete trailing sequence of at most 3 bytes. A NUL or any other invalid byte is binary. A non-empty buffer that decodes to empty text is binary.
+- Token truncation keeps the first `maxTokens * 4` Unicode code points and never splits a code point or a surrogate pair. The byte cap cuts on a code-point boundary in UTF-8 and never emits U+FFFD. The shared fixture is `tests/fixtures/parity/relevance.json`.
+- The token estimate is `ceil(code points / 4)`. Empty text is 0. tiktoken is not used for this check.
+- Skip globs are case-insensitive. `**` crosses directories and `*` does not. `skipped_reason` for a skip is `ignored`. The list includes `**/*.min.js` and `**/*.min.mjs`.
 
 Canonical skip list:
 
@@ -245,6 +246,7 @@ Canonical skip list:
 **/packages.lock.json
 **/Package.resolved
 **/*.min.js
+**/*.min.mjs
 **/*.min.css
 **/*.map
 **/dist/**

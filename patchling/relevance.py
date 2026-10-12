@@ -7,12 +7,14 @@ to the task. Only ``yes`` files are returned for ``generate_diff`` and
 
 Prompt version 3. Each request uses 1024 output tokens and
 ``reasoning_effort="low"`` (one retry without that parameter on a 4xx that
-names it). The cache key hashes prompt version, model, token limit, effort,
-intent, file path, and the content actually classified. A decision is a
+names it). The cache key is the SHA-256 of length-prefixed fields: prompt
+version, model, token limit, the effort actually sent (``low``, or empty when
+the retry omitted it), task, path, mode (``full``, ``truncated``, or
+``binary``), the preview note, and the exact body sent. A decision is a
 leading standalone yes/no after the supported wrappers. Anything else is
 malformed: the file is included, ``failed_open`` is set, and the decision is
-not cached. Cache read errors fail that file open; cache write errors are
-logged and do not abort the run.
+not cached. A cache read error is a miss and the model is called; a cache
+write error is logged and does not abort the run.
 """
 
 from __future__ import annotations
@@ -70,6 +72,7 @@ DEFAULT_SKIP_PATTERNS = (
     "**/packages.lock.json",
     "**/Package.resolved",
     "**/*.min.js",
+    "**/*.min.mjs",
     "**/*.min.css",
     "**/*.map",
     "**/dist/**",
@@ -83,6 +86,17 @@ DEFAULT_SKIP_PATTERNS = (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _length_prefixed(fields: list[str]) -> bytes:
+    """Canonical cache-key encoding: ``<utf-8 byte length>:<bytes>\\n`` per field."""
+    chunks: list[bytes] = []
+    for field in fields:
+        raw = field.encode("utf-8")
+        chunks.append(f"{len(raw)}:".encode("ascii"))
+        chunks.append(raw)
+        chunks.append(b"\n")
+    return b"".join(chunks)
 
 _POLICIES = ("include", "exclude", "truncate")
 
@@ -116,7 +130,7 @@ class RelevanceDecision:
     before parsing, when a model was called. ``tokens`` is the total token
     count of that call (0 when no call was made). ``cached`` is true when the
     judgment was reused. ``skipped_reason`` is set when the file was not sent
-    in full (``binary``, ``oversize``, ``truncated``, or ``generated``).
+    in full (``binary``, ``oversize``, ``truncated``, or ``ignored``).
     ``error`` is set when the call failed or the answer was empty or
     malformed; the file is still included. ``failed_open`` marks that case.
     """
@@ -186,11 +200,15 @@ class FilterRelevantResult:
 class RelevanceCache:
     """In-memory relevance cache with an optional on-disk JSON file.
 
-    The key is the SHA-256 of the exact classification inputs, joined by NUL
-    in this order: prompt version, model, output-token limit, reasoning
-    effort, intent, file path, and the content after truncation. Two paths
-    never share a key. Fallback and error decisions are not stored. A disk
-    read or write failure is logged and does not raise.
+    The key is the SHA-256 of the exact classification inputs. Each field is
+    written as ``<utf-8 byte length>:<bytes>`` and a newline, in this order:
+    prompt version, model, output-token limit, the effort actually sent,
+    task, file path, mode (``full``, ``truncated``, or ``binary``), the
+    preview note (empty when there is none), and the body sent to the model.
+    A full file and a truncated file that happen to show the same bytes do
+    not share a key. Lookups try effort ``low`` first, then the empty effort
+    used when that parameter was rejected. Fallback and error decisions are
+    not stored. A disk read or write failure is logged and does not raise.
     """
 
     def __init__(self, path: Optional[os.PathLike | str] = None):
@@ -209,13 +227,15 @@ class RelevanceCache:
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         prompt_version: str = PROMPT_VERSION,
         effort: Optional[str] = REASONING_EFFORT,
+        mode: str = "full",
+        note: str = "",
     ) -> str:
         """Hash the exact inputs that produced a classification.
 
-        ``content`` is the text sent to the model (after truncation or the
-        binary preview), not a sibling path's body. ``effort`` is the
-        ``reasoning_effort`` value requested, or an empty field when it is
-        omitted.
+        ``content`` is the body sent to the model. ``effort`` is the
+        ``reasoning_effort`` value actually sent, or an empty field when the
+        parameter was omitted. ``mode`` is ``full``, ``truncated``, or
+        ``binary``. ``note`` is the preview note, or empty.
         """
         fields = [
             str(prompt_version),
@@ -224,9 +244,11 @@ class RelevanceCache:
             "" if effort is None else str(effort),
             task,
             str(path),
+            str(mode or "full"),
+            "" if note is None else str(note),
             content,
         ]
-        return hashlib.sha256("\0".join(fields).encode("utf-8")).hexdigest()
+        return hashlib.sha256(_length_prefixed(fields)).hexdigest()
 
     def get(self, key: str):
         with self._lock:
@@ -281,6 +303,29 @@ def strip_think_tags(text: str) -> str:
     return cleaned.strip()
 
 
+_WRAPPER_PAIRS = (
+    ("**", "**"),
+    ("__", "__"),
+    ("`", "`"),
+    ('"', '"'),
+    ("'", "'"),
+    ("\u201c", "\u201d"),  # “ ”
+    ("\u2018", "\u2019"),  # ‘ ’
+)
+_LEADING_YES_NO = re.compile(r"^(yes|no)(?=$|\s|[.,!:;)])", re.IGNORECASE)
+
+
+def _peel_wrapping_pair(text: str) -> Optional[str]:
+    for opener, closer in _WRAPPER_PAIRS:
+        if (
+            text.startswith(opener)
+            and text.endswith(closer)
+            and len(text) >= len(opener) + len(closer)
+        ):
+            return text[len(opener):-len(closer)]
+    return None
+
+
 def _strip_answer_wrappers(text: str) -> str:
     """Peel whitespace, Answer/Decision prefixes, quotes, bold, and backticks."""
     changed = True
@@ -292,39 +337,49 @@ def _strip_answer_wrappers(text: str) -> str:
             text = text[match.end():]
             changed = True
             continue
-        if text.startswith("**") and text.endswith("**") and len(text) >= 4:
-            text = text[2:-2]
+        peeled = _peel_wrapping_pair(text)
+        if peeled is not None:
+            text = peeled
             changed = True
-            continue
-        if len(text) >= 2 and text[0] == text[-1] and text[0] in "`'\"":
-            text = text[1:-1]
-            changed = True
-            continue
     return text.strip()
 
 
+def _peel_first_token_wrapper(text: str) -> Optional[str]:
+    """Drop one wrapper that encloses only the first token, keeping the rest."""
+    for opener, closer in _WRAPPER_PAIRS:
+        if not text.startswith(opener):
+            continue
+        rest = text[len(opener):]
+        index = rest.find(closer)
+        if index < 0:
+            continue
+        inner = rest[:index]
+        if any(ch.isspace() for ch in inner):
+            continue
+        return inner + rest[index + len(closer):]
+    return None
+
+
 def _leading_yes_no(text: str) -> Optional[str]:
-    """The first token, after wrappers and trailing punctuation, if it is yes or no."""
+    """Yes or no when that exact word is the first token and then stops.
+
+    The token must be followed by the end of the string, whitespace, or one
+    of ``. , ! : ; )``. ``nope`` and ``yes?`` are malformed.
+    """
     stripped = _strip_answer_wrappers(text)
     if not stripped:
         return None
-    token = stripped.split()[0]
     changed = True
-    while changed and token:
+    while changed:
         changed = False
-        if token.startswith("**") and token.endswith("**") and len(token) >= 4:
-            token = token[2:-2]
+        peeled = _peel_first_token_wrapper(stripped)
+        if peeled is not None and peeled != stripped:
+            stripped = peeled.lstrip()
             changed = True
-            continue
-        peeled = token.strip("\"'`*")
-        peeled = peeled.rstrip(".,:;!?")
-        peeled = peeled.strip("\"'`*")
-        if peeled != token:
-            token = peeled
-            changed = True
-    if token.lower() in ("yes", "no"):
-        return token.lower()
-    return None
+    match = _LEADING_YES_NO.match(stripped)
+    if not match:
+        return None
+    return match.group(1).lower()
 
 
 def parse_relevance_answer(raw: str) -> tuple[Optional[str], str]:
@@ -488,15 +543,15 @@ def _resolve_cache(cache):
 
 
 def count_tokens(text: str, encoder=None) -> int:
-    """Shared token estimate: characters divided by 4, at least 1 when non-empty.
+    """Shared token estimate: ``ceil(code points / 4)``.
 
-    ``encoder`` is ignored. The filter does not use tiktoken, so a file crosses
-    the token cap at the same length in Python and JavaScript.
+    ``len`` counts Unicode code points, not UTF-8 bytes or UTF-16 units.
+    Empty text is 0. ``encoder`` is ignored. The filter does not use tiktoken.
     """
     del encoder
     if not text:
         return 0
-    return max(1, len(text) // 4)
+    return (len(text) + 3) // 4
 
 
 def truncate_utf8(text: str, max_bytes: int) -> str:
@@ -533,6 +588,11 @@ def truncate_utf8(text: str, max_bytes: int) -> str:
 
 
 def _truncate_text(text: str, max_bytes: Optional[int], max_tokens: Optional[int], encoder) -> str:
+    """Keep the first ``max_tokens * 4`` code points, then a UTF-8 byte cap.
+
+    A Python ``str`` slice never splits a code point or a surrogate pair.
+    ``truncate_utf8`` then drops an incomplete trailing character.
+    """
     del encoder
     out = text
     if max_tokens and count_tokens(out) > max_tokens:
@@ -568,7 +628,8 @@ def is_binary_content(content) -> bool:
     """True when the first 8192 bytes are not text.
 
     A multibyte character cut by that window is still text. A NUL or any
-    genuinely invalid byte is binary.
+    genuinely invalid byte is binary. A non-empty buffer that decodes to
+    empty text (only an incomplete UTF-8 sequence) is binary.
     """
     if isinstance(content, str):
         sample = content.encode("utf-8")[:8192]
@@ -578,6 +639,8 @@ def is_binary_content(content) -> bool:
         return False
     text = _utf8_text_or_none(sample)
     if text is None:
+        return True
+    if sample and text == "":
         return True
     return _text_looks_binary(text)
 
@@ -595,23 +658,43 @@ def _coerce_text(content) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, (bytes, bytearray)):
-        return bytes(content).decode("utf-8", errors="replace")
+        raw = bytes(content)
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("utf-8", errors="replace")
     raise TypeError(f"file content must be str or bytes, got {type(content).__name__}")
 
 
-def _usage_and_text(response):
-    if isinstance(response, dict):
-        content = response["choices"][0]["message"]["content"]
-        usage = response.get("usage") or {}
-        prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-        total = usage.get("total_tokens") or (prompt + completion)
-        return content or "", int(prompt), int(completion), int(total)
+def _prepare_content(content) -> tuple[bool, str]:
+    """Return ``(is_binary, text)``.
 
-    content = response.choices[0].message.content or ""
-    usage = getattr(response, "usage", None)
+    Valid UTF-8 bytes are decoded to text and are never replaced with an
+    empty string. Invalid UTF-8 or a NUL byte takes the binary path.
+    """
+    if isinstance(content, str):
+        return is_binary_content(content), content
+    if isinstance(content, (bytes, bytearray)):
+        raw = bytes(content)
+        if b"\x00" in raw:
+            return True, ""
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return True, ""
+        return _text_looks_binary(text), text
+    raise TypeError(f"file content must be str or bytes, got {type(content).__name__}")
+
+
+class _EnvelopeError(Exception):
+    """The completion payload had no usable message content."""
+
+
+def _usage_triplet(usage) -> tuple[int, int, int]:
     prompt = completion = total = 0
-    if usage:
+    if not usage:
+        return 0, 0, 0
+    try:
         if isinstance(usage, dict):
             prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
             completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
@@ -620,7 +703,67 @@ def _usage_and_text(response):
             prompt = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0
             completion = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0) or 0
             total = getattr(usage, "total_tokens", None) or (prompt + completion)
-    return content, int(prompt), int(completion), int(total)
+        return int(prompt), int(completion), int(total)
+    except (TypeError, ValueError):
+        return 0, 0, 0
+
+
+def _content_text(content):
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        raise _EnvelopeError("message content is not text")
+    return content
+
+
+def _usage_and_text(response):
+    """Read the first choice's message content.
+
+    Missing choices, an empty choice list, a missing message or content
+    field, and a non-JSON body raise :class:`_EnvelopeError`. Callers treat
+    that as a failed-open decision and do not cache it.
+    """
+    payload = response
+    if isinstance(response, (bytes, bytearray)):
+        try:
+            payload = bytes(response).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise _EnvelopeError(f"non-JSON response: {exc}") from exc
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise _EnvelopeError(f"non-JSON response: {exc}") from exc
+
+    if isinstance(payload, dict):
+        if "choices" not in payload:
+            raise _EnvelopeError("missing choices")
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or len(choices) == 0:
+            raise _EnvelopeError("missing or empty choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict) or "content" not in message:
+            raise _EnvelopeError("missing message content")
+        content = _content_text(message.get("content"))
+        prompt, completion, total = _usage_triplet(payload.get("usage") or {})
+        return content, prompt, completion, total
+
+    choices = getattr(payload, "choices", None)
+    if choices is None:
+        raise _EnvelopeError("missing choices")
+    try:
+        if len(choices) == 0:
+            raise _EnvelopeError("missing or empty choices")
+        message = choices[0].message
+    except _EnvelopeError:
+        raise
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise _EnvelopeError("missing message content") from exc
+    if message is None or not hasattr(message, "content"):
+        raise _EnvelopeError("missing message content")
+    content = _content_text(message.content)
+    prompt, completion, total = _usage_triplet(getattr(payload, "usage", None))
+    return content, prompt, completion, total
 
 
 def _decision_from_record(path: str, record: dict, cached: bool) -> RelevanceDecision:
@@ -709,6 +852,7 @@ def _ask(
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
+    sent_effort = reasoning_effort
     try:
         response = _complete(
             call=call,
@@ -721,6 +865,7 @@ def _ask(
         )
     except Exception as exc:
         if reasoning_effort and _reasoning_effort_rejected(exc):
+            sent_effort = None
             response = _complete(
                 call=call,
                 api_key=api_key,
@@ -732,7 +877,8 @@ def _ask(
             )
         else:
             raise
-    return _usage_and_text(response)
+    raw, prompt_tokens, completion_tokens, total_tokens = _usage_and_text(response)
+    return raw, prompt_tokens, completion_tokens, total_tokens, sent_effort
 
 
 def filter_relevant(
@@ -766,10 +912,14 @@ def filter_relevant(
     ``cache`` is a :class:`RelevanceCache`, a filesystem path (memory plus that
     file), ``None`` (a fresh in-memory cache for this call), or ``False``
     (disabled). The cache key hashes prompt version, model, output-token
-    limit, reasoning effort, the task, the file path, and the content after
-    truncation. Clear yes/no answers are cached. Empty answers, malformed
-    answers, and errors are not. A cache read error includes that file and
-    does not abort the run; a cache write error is logged and ignored.
+    limit, the effort actually sent, the task, the file path, the mode, the
+    preview note, and the exact body sent. Clear yes/no answers are cached
+    under that effective key. Later lookups try effort ``low`` first, then
+    the empty effort. Empty answers, malformed answers, and errors are not
+    cached. A cache read error is a miss and the model is called; a cache
+    write error is logged and ignored. A response with missing choices, an
+    empty choice list, a missing message, or a non-JSON body fails that file
+    open and is not cached.
 
     Binary files and files over ``max_bytes`` / ``max_tokens`` are not sent in
     full. ``on_binary`` and ``on_oversize`` are ``include`` (keep, no model
@@ -809,6 +959,7 @@ def filter_relevant(
         from .core import call_llm as call_llm  # noqa: PLW0621
 
     by_path: dict[str, RelevanceDecision] = {}
+    text_by_path: dict[str, str] = {}
     # Group files that share a cache key so each distinct body is sent once.
     groups: dict[str, list] = {}
     group_order: list[str] = []
@@ -818,12 +969,13 @@ def filter_relevant(
             by_path[path] = _skip_decision(
                 path,
                 "no",
-                "generated",
+                "ignored",
                 "skipped lockfile or generated file",
             )
             continue
-        binary = is_binary_content(content)
-        text = _coerce_text(content)
+        binary, text = _prepare_content(content)
+        if not binary:
+            text_by_path[path] = text
         if binary:
             if on_binary == "truncate":
                 note = (
@@ -831,7 +983,9 @@ def filter_relevant(
                     "judge relevance from the path and this note."
                 )
                 body = f"[binary file, {len(content) if isinstance(content, (bytes, bytearray)) else len(text.encode('utf-8'))} bytes, contents omitted]"
-                item = _pending_item(path, body, note, "truncated", task, model, output_budget, effort)
+                item = _pending_item(
+                    path, body, note, "truncated", "binary", task, model, output_budget, effort
+                )
                 _enqueue(groups, group_order, item)
             else:
                 decision = "yes" if on_binary == "include" else "no"
@@ -855,7 +1009,9 @@ def filter_relevant(
                     "Note: this file was truncated to fit the relevance check "
                     f"({n_bytes} bytes, {n_tokens} tokens). Judge from the portion shown."
                 )
-                item = _pending_item(path, body, note, "truncated", task, model, output_budget, effort)
+                item = _pending_item(
+                    path, body, note, "truncated", "truncated", task, model, output_budget, effort
+                )
                 _enqueue(groups, group_order, item)
             else:
                 decision = "yes" if on_oversize == "include" else "no"
@@ -871,10 +1027,8 @@ def filter_relevant(
                 )
             continue
 
-        item = _pending_item(path, text, None, None, task, model, output_budget, effort)
+        item = _pending_item(path, text, None, None, "full", task, model, output_budget, effort)
         _enqueue(groups, group_order, item)
-
-    cache_read_errors: dict[str, BaseException] = {}
 
     def _safe_get(key: str):
         if cache_obj is None:
@@ -882,8 +1036,8 @@ def filter_relevant(
         try:
             return cache_obj.get(key)
         except Exception as exc:
+            # A read failure is a cache miss. The model is called normally.
             _log.warning("relevance cache read failed for %s: %s", key, exc)
-            cache_read_errors[key] = exc
             return None
 
     def _reusable(hit) -> bool:
@@ -898,14 +1052,18 @@ def filter_relevant(
             return False
         return True
 
+    def _lookup(sample):
+        for key in (sample["key"], sample["key_omitted"]):
+            hit = _safe_get(key)
+            if _reusable(hit):
+                return key, hit
+        return None, None
+
     needs_call = False
     for key in group_order:
-        if key in cache_read_errors:
-            continue
-        if not _reusable(_safe_get(key)):
-            if key in cache_read_errors:
-                continue
+        if _lookup(groups[key][0])[0] is None:
             needs_call = True
+            break
     if needs_call and not api_key:
         raise RuntimeError(
             "GPTDIFF_LLM_API_KEY is required for the relevance filter. "
@@ -936,23 +1094,18 @@ def filter_relevant(
                 for item in items
             ]
 
-        if key in cache_read_errors:
-            return fail_open(f"cache error: {cache_read_errors[key]}")
-        if cache_obj is not None:
-            hit = _safe_get(key)
-            if key in cache_read_errors:
-                return fail_open(f"cache error: {cache_read_errors[key]}")
-            if _reusable(hit):
-                return [
-                    _decision_from_record(item["path"], {**hit, "cache_key": key}, cached=True)
-                    for item in items
-                ]
         sample = items[0]
+        hit_key, hit = _lookup(sample)
+        if hit is not None:
+            return [
+                _decision_from_record(item["path"], {**hit, "cache_key": hit_key}, cached=True)
+                for item in items
+            ]
 
         attempt = 0
         while True:
             try:
-                raw, prompt_tokens, completion_tokens, total_tokens = _ask(
+                raw, prompt_tokens, completion_tokens, total_tokens, sent_effort = _ask(
                     call=call_llm,
                     api_key=api_key,
                     base_url=base_url,
@@ -965,6 +1118,8 @@ def filter_relevant(
                     reasoning_effort=effort,
                 )
                 break
+            except _EnvelopeError as exc:
+                return fail_open(f"malformed response: {exc}")
             except Exception as exc:
                 if attempt >= max_attempts - 1 or not is_transient_error(exc):
                     return fail_open(f"{type(exc).__name__}: {exc}")
@@ -1004,6 +1159,7 @@ def filter_relevant(
             ]
         decision = parsed
         reason = cleaned
+        store_key = sample["key"] if sent_effort else sample["key_omitted"]
         record = {
             "decision": decision,
             "reason": reason,
@@ -1014,11 +1170,11 @@ def filter_relevant(
             "skipped_reason": sample["skipped_reason"],
             "error": None,
             "failed_open": False,
-            "cache_key": key,
+            "cache_key": store_key,
         }
         if cache_obj is not None:
             try:
-                cache_obj.put(key, record)
+                cache_obj.put(store_key, record)
             except Exception as exc:
                 _log.warning("relevance cache write failed for %s: %s", sample["path"], exc)
         return [
@@ -1034,7 +1190,7 @@ def filter_relevant(
                 skipped_reason=item["skipped_reason"],
                 error=None,
                 failed_open=False,
-                cache_key=key,
+                cache_key=store_key,
             )
             for item in items
         ]
@@ -1059,27 +1215,36 @@ def filter_relevant(
     for path, content in files.items():
         decision = by_path[path]
         if decision.decision == "yes":
-            included[path] = content if isinstance(content, str) else _coerce_text(content)
+            if path in text_by_path:
+                included[path] = text_by_path[path]
+            elif isinstance(content, str):
+                included[path] = content
+            else:
+                included[path] = _coerce_text(content)
 
     return FilterRelevantResult(files=included, decisions=decisions, model=model)
 
 
-def _pending_item(path, body, note, skipped_reason, task, model, max_output_tokens, effort):
-    key = RelevanceCache.make_key(
-        model,
-        task,
-        body,
-        path,
+def _pending_item(path, body, note, skipped_reason, mode, task, model, max_output_tokens, effort):
+    note_text = "" if note is None else str(note)
+    common = dict(
+        model=model,
+        task=task,
+        content=body,
+        path=path,
         max_output_tokens=max_output_tokens,
         prompt_version=PROMPT_VERSION,
-        effort=effort,
+        mode=mode,
+        note=note_text,
     )
     return {
         "path": path,
         "body": body,
         "note": note,
         "skipped_reason": skipped_reason,
-        "key": key,
+        "mode": mode,
+        "key": RelevanceCache.make_key(**common, effort=effort),
+        "key_omitted": RelevanceCache.make_key(**common, effort=""),
     }
 
 
