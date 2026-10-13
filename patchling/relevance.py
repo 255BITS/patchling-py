@@ -16,9 +16,11 @@ supported wrappers, including a quoted decision followed by a reason.
 Anything else is malformed: the file is included, ``failed_open`` is set, and
 the decision is not cached. Non-string message content is that same failure.
 A cache read error is a miss and the model is called; a cache write error is
-logged and does not abort the run. Invalid UTF-8 anywhere in a byte payload
+logged and does not abort the run. A truncated UTF-8 tail keeps the valid
+prefix (``b"a\\xc3"`` is ``"a"``). Any other invalid UTF-8 in a byte payload
 is binary. ``on_binary="include"`` returns those original bytes unchanged.
-A leading UTF-8 BOM (U+FEFF) stays in decoded text.
+A leading UTF-8 BOM (U+FEFF) stays in decoded text. Ignored paths are
+excluded before their bytes are decoded.
 """
 
 from __future__ import annotations
@@ -631,11 +633,12 @@ def _utf8_text_or_none(sample: bytes) -> Optional[str]:
 def is_binary_content(content) -> bool:
     """True when the payload is not text.
 
-    The first 8192 bytes are decoded as UTF-8. An incomplete sequence of at
-    most 3 bytes at that probe boundary is still text. A NUL or any other
-    invalid byte inside the window is binary, and so is a non-empty window
-    that decodes to empty text. Bytes past the window are checked too: any
-    invalid UTF-8 there is binary. A leading BOM is text.
+    The whole payload is validated as UTF-8. An incomplete trailing sequence
+    of at most 3 bytes keeps the valid prefix and is still text, at any
+    length (``b"a\\xc3"`` is ``"a"``). A NUL or any other invalid byte is
+    binary, and so is a non-empty buffer that decodes to empty text. The
+    first 8192 bytes are also checked for control-character density. A
+    leading BOM is text.
     """
     if isinstance(content, str):
         if "\x00" in content:
@@ -661,11 +664,10 @@ def _bytes_are_binary(raw: bytes) -> bool:
         return True
     if len(raw) <= 8192:
         return False
-    # The probe may end inside a character. The rest of the file has to be
-    # well-formed UTF-8; an invalid byte after the window is not dropped.
-    try:
-        raw.decode("utf-8")
-    except UnicodeDecodeError:
+    # An incomplete trailing sequence of at most 3 bytes keeps the prefix.
+    # Any other invalid byte, including one past the probe window, is binary.
+    rest = _utf8_text_or_none(raw)
+    if rest is None or rest == "":
         return True
     return False
 
@@ -694,15 +696,13 @@ def _coerce_text(content) -> str:
 def _decode_utf8_text(raw: bytes) -> Optional[str]:
     """Decode UTF-8, keeping a leading BOM (U+FEFF).
 
-    ``utf-8-sig`` is not used. A buffer of at most 8192 bytes may end on an
-    incomplete sequence; those trailing bytes are dropped. A longer buffer
-    must be entirely well-formed, so a bad byte after the probe is not cut off.
+    ``utf-8-sig`` is not used. An incomplete trailing sequence of at most
+    3 bytes is dropped and the valid prefix is kept, at any length. Any
+    other invalid byte returns ``None`` so the caller takes the binary path.
     """
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
-        if len(raw) > 8192:
-            return None
         return _utf8_text_or_none(raw)
 
 
@@ -710,9 +710,10 @@ def _prepare_content(content) -> tuple[bool, str]:
     """Return ``(is_binary, text)``.
 
     Valid UTF-8 bytes are decoded to text, including a leading U+FEFF, and
-    are never replaced with an empty string. Invalid UTF-8 anywhere, or a
-    NUL byte, takes the binary path. Callers that include a binary file pass
-    the original bytes through instead of this text.
+    are never replaced with an empty string. A truncated trailing sequence
+    keeps the valid prefix. Any other invalid UTF-8, or a NUL byte, takes
+    the binary path. Callers that include a binary file pass the original
+    bytes through instead of this text.
     """
     if isinstance(content, str):
         return is_binary_content(content), content
@@ -977,8 +978,9 @@ def filter_relevant(
     the empty effort.
 
     Binary files and files over ``max_bytes`` / ``max_tokens`` are not sent in
-    full. Invalid UTF-8 after the first 8192 bytes is still binary.
-    ``on_binary="include"`` keeps the original bytes. ``on_binary`` and
+    full. A truncated UTF-8 tail keeps the valid prefix. Any other invalid
+    UTF-8 is binary. Ignored paths are excluded before their bytes are
+    decoded. ``on_binary="include"`` keeps the original bytes. ``on_binary`` and
     ``on_oversize`` are ``include`` (keep, no model
     call), ``exclude`` (drop, no model call), or ``truncate`` (ask the model
     about a truncated or redacted preview). Pass ``None`` for ``max_bytes`` or

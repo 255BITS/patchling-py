@@ -163,13 +163,13 @@
     { "text": "a€b", "maxBytes": 4, "expected": "a€" }
   ],
   "bytes": {
-    "rule": "Valid UTF-8 bytes decode to text and a non-empty buffer is never decoded as empty. Invalid UTF-8 takes the binary path. Different bytes at the same path do not share a key.",
+    "rule": "Valid UTF-8 bytes decode to text and a non-empty buffer is never decoded as empty. A truncated trailing sequence keeps the valid prefix (bytes 0x61 0xC3 decode to \"a\"). Any other invalid UTF-8 takes the binary path. Different bytes at the same path do not share a key.",
     "validUtf8": "café",
     "changed": ["alpha", "beta"]
   },
   "binary": {
     "sampleBytes": 8192,
-    "rule": "Validate the whole payload as UTF-8. An incomplete trailing sequence is tolerated only when it ends on the 8192-byte probe boundary. A NUL or any other invalid byte anywhere is binary. A non-empty buffer that decodes to empty text is binary. Included binary files keep their original bytes.",
+    "rule": "Validate the whole payload as UTF-8. An incomplete trailing sequence keeps the valid prefix at any length, including bytes 0x61 0xC3 decoding to \"a\". A NUL or any other invalid byte anywhere is binary. A non-empty buffer that decodes to empty text is binary. Included binary files keep their original bytes.",
     "cases": [
       { "name": "2-byte cut", "pad": 8191, "tail": [195], "binary": false },
       { "name": "3-byte cut", "pad": 8190, "tail": [226, 130], "binary": false },
@@ -177,6 +177,7 @@
       { "name": "invalid lead", "pad": 8191, "tail": [255], "binary": true },
       { "name": "nul", "pad": 0, "tail": [104, 105, 0], "binary": true },
       { "name": "incomplete only", "pad": 0, "tail": [195], "binary": true },
+      { "name": "truncated tail keeps prefix", "pad": 0, "tail": [97, 195], "binary": false, "text": "a" },
       { "name": "8192 ASCII + 0xff + TAIL", "pad": 8192, "tail": [255, 84, 65, 73, 76], "binary": true }
     ]
   },
