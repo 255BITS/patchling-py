@@ -1373,6 +1373,97 @@ def test_invalid_utf8_after_probe_window_is_binary_and_include_keeps_bytes():
     assert included.files["a.bin"].endswith(b"\xffTAIL")
 
 
+def test_truncated_utf8_tail_keeps_the_valid_prefix():
+    from patchling.relevance import _decode_utf8_text, _prepare_content, is_binary_content
+
+    short = b"a\xc3"
+    assert is_binary_content(short) is False
+    assert _decode_utf8_text(short) == "a"
+    assert _prepare_content(short) == (False, "a")
+    assert _prepare_content(b"hello\xe2\x82") == (False, "hello")
+    assert _prepare_content(b"a\xf0\x9f\x98") == (False, "a")
+    # A lone incomplete sequence decodes to empty text and stays binary.
+    assert is_binary_content(b"\xc3") is True
+    assert _prepare_content(b"\xc3") == (True, "")
+    # A bad continuation is not a truncated tail.
+    assert is_binary_content(b"a\xc3X") is True
+    assert _decode_utf8_text(b"a\xc3X") is None
+
+    long = b"a" * 8192 + b"\xc3"
+    assert len(long) > 8192
+    assert is_binary_content(long) is False
+    binary, text = _prepare_content(long)
+    assert binary is False
+    assert text == "a" * 8192
+    assert "\ufffd" not in text
+
+    bodies = []
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        bodies.append(messages[-1]["content"])
+        return _Response("yes")
+
+    result = filter_relevant(
+        {"a.py": short},
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    assert result.decisions[0].skipped_reason is None
+    assert result.files["a.py"] == "a"
+    assert "File contents:\na\n\nIs this file relevant" in bodies[0]
+    assert "\ufffd" not in bodies[0]
+
+
+def test_ignored_binary_is_not_decoded(monkeypatch):
+    import patchling.relevance as relevance
+
+    payload = bytes([0x61, 0xC3, 0xFF, 0x00])
+    decoded = []
+
+    def _spy(name, fn):
+        def wrapped(content, *args, **kwargs):
+            raw = content
+            if isinstance(raw, (bytes, bytearray)) and bytes(raw) == payload:
+                decoded.append(name)
+            return fn(content, *args, **kwargs)
+        return wrapped
+
+    for name in (
+        "_prepare_content",
+        "is_binary_content",
+        "_decode_utf8_text",
+        "_utf8_text_or_none",
+        "_coerce_text",
+    ):
+        monkeypatch.setattr(relevance, name, _spy(name, getattr(relevance, name)))
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        user = messages[-1]["content"]
+        assert "dist/app.min.js" not in user
+        return _Response("yes")
+
+    result = filter_relevant(
+        {
+            "dist/app.min.js": payload,
+            "src/keep.js": "export const n = 1;\n",
+        },
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    ignored = next(item for item in result.decisions if item.path == "dist/app.min.js")
+    assert ignored.decision == "no"
+    assert ignored.skipped_reason == "ignored"
+    assert "dist/app.min.js" not in result.files
+    assert decoded == []
+    assert result.files["src/keep.js"] == "export const n = 1;\n"
+
+
 def test_leading_bom_is_preserved_in_decoded_text():
     from patchling.relevance import PROMPT_VERSION, _prepare_content, _truncate_text
 
@@ -1710,9 +1801,10 @@ def test_cli_apply_uses_the_full_original_file_map(tmp_path, monkeypatch):
 
 
 # sha256 of tests/fixtures/parity/relevance.json. That file is a byte-identical
-# copy of test/fixtures/parity/relevance.json on 255BITS/patchling branch
-# cursor/relevance-filter-followup-915b. A mismatch fails CI.
-RELEVANCE_FIXTURE_SHA256 = "6976ad71714be0138a6043d9bdeb724abe34a65515f8389913dca10a0c48c4f2"
+# copy of test/fixtures/parity/relevance.json on 255BITS/patchling commit
+# f26c770a026f2554da3972c10b7f7918d075fd56 (branch cursor/main-green-utf8-915b).
+# A mismatch fails CI.
+RELEVANCE_FIXTURE_SHA256 = "dbe5c7033b279be2a0b923d82dffb1349039b051e18a3650b224570374b8914b"
 
 
 def test_vendored_relevance_fixture_matches_library():
@@ -1722,6 +1814,7 @@ def test_vendored_relevance_fixture_matches_library():
         PROMPT_VERSION,
         _SYSTEM_PROMPT,
         _build_user_prompt,
+        _prepare_content,
         _truncate_text,
         count_tokens,
         is_binary_content,
@@ -1843,6 +1936,11 @@ def test_vendored_relevance_fixture_matches_library():
             sample = b"a" * case["pad"] + tail
         expect = case.get("binary", case.get("expect_binary"))
         assert is_binary_content(sample) is expect, case
+        if "text" in case:
+            binary_flag, text = _prepare_content(sample)
+            assert binary_flag is False, case
+            assert text == case["text"], case
+            assert "\ufffd" not in text
 
     bom = data.get("bom")
     if bom:
