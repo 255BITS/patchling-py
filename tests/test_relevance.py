@@ -1802,9 +1802,9 @@ def test_cli_apply_uses_the_full_original_file_map(tmp_path, monkeypatch):
 
 # sha256 of tests/fixtures/parity/relevance.json. That file is a byte-identical
 # copy of test/fixtures/parity/relevance.json on 255BITS/patchling commit
-# 034aa2f45afad11253d7deee7fa4750468925f26 (branch cursor/main-green-utf8-915b).
+# f26c770a026f2554da3972c10b7f7918d075fd56 (branch cursor/main-green-utf8-915b).
 # A mismatch fails CI.
-RELEVANCE_FIXTURE_SHA256 = "c5f3bd4af43ff2a2036b8012c2ed69c70cd9b2c09281bc58e864fb0194eebe5c"
+RELEVANCE_FIXTURE_SHA256 = "dbe5c7033b279be2a0b923d82dffb1349039b051e18a3650b224570374b8914b"
 
 
 def test_vendored_relevance_fixture_matches_library():

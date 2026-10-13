@@ -163,13 +163,13 @@
     { "text": "a€b", "maxBytes": 4, "expected": "a€" }
   ],
   "bytes": {
-    "rule": "Valid UTF-8 bytes decode to text and a non-empty buffer is never decoded as empty. A truncated trailing sequence keeps the valid prefix (bytes 0x61 0xC3 decode to \"a\"). Any other invalid UTF-8 takes the binary path. Different bytes at the same path do not share a key.",
+    "rule": "Valid UTF-8 bytes decode to text and a non-empty buffer is never decoded as empty. A truncated trailing sequence keeps the valid prefix only when those bytes are a legal partial character (0x61 0xC3 and 0x61 0xE0 0xA0 decode to \"a\"). Any other invalid UTF-8 takes the binary path. Different bytes at the same path do not share a key.",
     "validUtf8": "café",
     "changed": ["alpha", "beta"]
   },
   "binary": {
     "sampleBytes": 8192,
-    "rule": "Validate the whole payload as UTF-8. An incomplete trailing sequence keeps the valid prefix at any length, including bytes 0x61 0xC3 decoding to \"a\". A NUL or any other invalid byte anywhere is binary. A non-empty buffer that decodes to empty text is binary. Included binary files keep their original bytes.",
+    "rule": "Validate the whole payload as UTF-8. Tolerate a tail only when it is a truncated but valid partial sequence at the exact end of the sample: the lead must be able to start a character (not C0, C1, or F5-FF), every continuation must be 80-BF, and the second byte must be in range (E0 is A0-BF, ED is 80-9F, F0 is 90-BF, F4 is 80-8F). That partial keeps the valid prefix at any length, including 0x61 0xC3 and 0x61 0xE0 0xA0 decoding to \"a\". Bytes 0x61 0xE0 0x80, 0x61 0xED 0xA0, 0x61 0xF0 0x80, and 0x61 0xF4 0x90 are binary. A NUL or any other invalid byte anywhere is binary. A non-empty buffer that decodes to empty text is binary. Included binary files keep their original bytes.",
     "cases": [
       { "name": "2-byte cut", "pad": 8191, "tail": [195], "binary": false },
       { "name": "3-byte cut", "pad": 8190, "tail": [226, 130], "binary": false },
@@ -178,7 +178,24 @@
       { "name": "nul", "pad": 0, "tail": [104, 105, 0], "binary": true },
       { "name": "incomplete only", "pad": 0, "tail": [195], "binary": true },
       { "name": "truncated tail keeps prefix", "pad": 0, "tail": [97, 195], "binary": false, "text": "a" },
-      { "name": "8192 ASCII + 0xff + TAIL", "pad": 8192, "tail": [255, 84, 65, 73, 76], "binary": true }
+      { "name": "valid e0 partial keeps prefix", "pad": 0, "tail": [97, 224, 160], "binary": false, "text": "a" },
+      { "name": "8192 ASCII + 0xff + TAIL", "pad": 8192, "tail": [255, 84, 65, 73, 76], "binary": true },
+      { "name": "e0 second byte 80", "pad": 1, "tail": [224, 128], "binary": true },
+      { "name": "ed second byte a0", "pad": 1, "tail": [237, 160], "binary": true },
+      { "name": "f0 second byte 80", "pad": 1, "tail": [240, 128], "binary": true },
+      { "name": "f4 second byte 90", "pad": 1, "tail": [244, 144], "binary": true },
+      { "name": "e0 second byte 80 at 8192", "pad": 8192, "tail": [224, 128], "binary": true },
+      { "name": "ed second byte a0 at 8192", "pad": 8192, "tail": [237, 160], "binary": true },
+      { "name": "f0 second byte 80 at 8192", "pad": 8192, "tail": [240, 128], "binary": true },
+      { "name": "f4 second byte 90 at 8192", "pad": 8192, "tail": [244, 144], "binary": true },
+      { "name": "e0 second byte 80 at 9000", "pad": 9000, "tail": [224, 128], "binary": true },
+      { "name": "ed second byte a0 at 9000", "pad": 9000, "tail": [237, 160], "binary": true },
+      { "name": "f0 second byte 80 at 9000", "pad": 9000, "tail": [240, 128], "binary": true },
+      { "name": "f4 second byte 90 at 9000", "pad": 9000, "tail": [244, 144], "binary": true },
+      { "name": "lead c0", "pad": 0, "tail": [97, 192], "binary": true },
+      { "name": "lead c1", "pad": 0, "tail": [97, 193], "binary": true },
+      { "name": "lead f5", "pad": 0, "tail": [97, 245], "binary": true },
+      { "name": "continuation below 80", "pad": 0, "tail": [97, 195, 127], "binary": true }
     ]
   },
   "bom": {
