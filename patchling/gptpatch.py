@@ -16,9 +16,12 @@ from pathlib import Path
 from patchling.core import apply_diff, smart_apply_patch, color_code_diff
 
 def parse_arguments():
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         description="Apply a unified diff to the file system using GPTDiff's patch logic."
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--diff",

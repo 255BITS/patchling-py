@@ -48,6 +48,8 @@ Building for the browser? Start with [patchling for JS](https://github.com/255BI
 pip install patchling
 ```
 
+Verify the installed CLI version with `patchling --version` or `patchling-apply --version`.
+
 ### 2. Set your API key
 
 Works with any OpenAI-compatible endpoint. Get a key at [nano-gpt.com/api](https://nano-gpt.com/api), or point `GPTDIFF_LLM_BASE_URL` at your own provider.

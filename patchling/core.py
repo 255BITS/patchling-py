@@ -852,7 +852,10 @@ def smartapply(
     return result
 
 def parse_arguments():
+    from . import __version__
+
     parser = argparse.ArgumentParser(description='Generate and optionally apply git diffs using GPT-4.')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('prompt', type=str, help='Prompt that runs on the codebase.')
     parser.add_argument('--apply', action='store_true', help='Attempt to apply the generated git diff. Uses smartapply if applying the patch fails.')
     parser.add_argument('--prepend', type=str, default=None, help='Path to content prepended to system prompt')
