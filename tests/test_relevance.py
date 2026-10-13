@@ -1217,6 +1217,13 @@ def test_parser_wrappers_and_terminators():
     assert parse_relevance_answer("**yes**, because it is")[0] == "yes"
 
 
+def test_parser_quoted_decision_followed_by_reason():
+    assert parse_relevance_answer("**no** unrelated")[0] == "no"
+    assert parse_relevance_answer('"no" unrelated')[0] == "no"
+    assert parse_relevance_answer("\u201cno\u201d — unrelated")[0] == "no"
+    assert parse_relevance_answer("**yes** the helper is here")[0] == "yes"
+
+
 def test_full_and_truncated_abc_do_not_share_a_key():
     full = RelevanceCache.make_key(
         model="m", task="task", content="abc", path="a.py", mode="full", note=""
@@ -1314,6 +1321,217 @@ def test_valid_utf8_bytes_are_decoded_and_do_not_share_a_path_key():
     assert len(bodies) == 2
 
 
+def test_invalid_utf8_after_probe_window_is_binary_and_include_keeps_bytes():
+    from patchling.relevance import _prepare_content, is_binary_content
+
+    payload = b"a" * 8192 + b"\xff" + b"TAIL"
+    assert is_binary_content(payload) is True
+    assert _prepare_content(payload) == (True, "")
+
+    # A character split by the 8192 window is still text when the whole file is valid.
+    split = b"a" * 8191 + "é".encode("utf-8") + b"TAIL"
+    assert len(split) > 8192
+    binary, text = _prepare_content(split)
+    assert binary is False
+    assert text.endswith("éTAIL")
+    assert "\ufffd" not in text
+
+    calls = {"n": 0}
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        calls["n"] += 1
+        user = messages[-1]["content"]
+        assert "TAIL" not in user
+        return _Response("yes")
+
+    excluded = filter_relevant(
+        {"a.bin": payload},
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        on_binary="exclude",
+        call_llm=fake_call_llm,
+    )
+    assert calls["n"] == 0
+    assert excluded.files == {}
+    assert excluded.decisions[0].decision == "no"
+    assert excluded.decisions[0].skipped_reason == "binary"
+
+    included = filter_relevant(
+        {"a.bin": payload},
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        on_binary="include",
+        call_llm=fake_call_llm,
+    )
+    assert calls["n"] == 0
+    assert included.decisions[0].decision == "yes"
+    assert included.files["a.bin"] is payload
+    assert included.files["a.bin"].endswith(b"\xffTAIL")
+
+
+def test_leading_bom_is_preserved_in_decoded_text():
+    from patchling.relevance import PROMPT_VERSION, _prepare_content, _truncate_text
+
+    raw = b"\xef\xbb\xbfhello"
+    binary, text = _prepare_content(raw)
+    assert binary is False
+    assert text == "\ufeffhello"
+    assert text.startswith("\ufeff")
+    assert _truncate_text(text, None, 1, None).startswith("\ufeff")
+
+    with_bom = RelevanceCache.make_key(
+        model="m",
+        task="task",
+        content=text,
+        path="a.py",
+        max_output_tokens=1024,
+        prompt_version=PROMPT_VERSION,
+        effort="low",
+        mode="full",
+        note="",
+    )
+    without_bom = RelevanceCache.make_key(
+        model="m",
+        task="task",
+        content="hello",
+        path="a.py",
+        max_output_tokens=1024,
+        prompt_version=PROMPT_VERSION,
+        effort="low",
+        mode="full",
+        note="",
+    )
+    assert with_bom != without_bom
+
+    def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None):
+        assert "\ufeffhello" in messages[-1]["content"]
+        return _Response("yes")
+
+    result = filter_relevant(
+        {"a.py": raw},
+        "task",
+        model="m",
+        cache=False,
+        api_key="k",
+        call_llm=fake_call_llm,
+    )
+    assert result.files["a.py"] == "\ufeffhello"
+
+
+def test_non_string_message_content_fails_open_uncached():
+    class Message:
+        content = ["no"]
+
+    class Choice:
+        message = Message()
+
+    class Response:
+        choices = [Choice()]
+        usage = None
+
+    payloads = [
+        {"choices": [{"message": {"content": ["no"]}}]},
+        Response(),
+    ]
+    for payload in payloads:
+        calls = {"n": 0}
+
+        def fake_call_llm(api_key, base_url, model, messages, max_tokens, temperature, budget_tokens=None, payload=payload):
+            calls["n"] += 1
+            return payload
+
+        cache = RelevanceCache()
+        result = filter_relevant(
+            {"a.py": "x\n"},
+            "task",
+            model="m",
+            cache=cache,
+            api_key="k",
+            call_llm=fake_call_llm,
+        )
+        decision = result.decisions[0]
+        assert decision.failed_open is True
+        assert decision.decision == "yes"
+        assert decision.cached is False
+        assert "malformed response" in (decision.error or "")
+        assert cache.get(decision.cache_key) is None if decision.cache_key else True
+        again = filter_relevant(
+            {"a.py": "x\n"},
+            "task",
+            model="m",
+            cache=cache,
+            api_key="k",
+            call_llm=fake_call_llm,
+        )
+        assert again.decisions[0].cached is False
+        assert calls["n"] == 2
+
+
+def test_default_wrapper_caches_empty_effort_when_legacy_sdk_rejects_it(monkeypatch):
+    """The real call_llm retries a legacy SDK; the cache key uses effort ""."""
+    from patchling.relevance import PROMPT_VERSION
+
+    calls = []
+
+    class Message:
+        content = "no, unrelated"
+
+    class Choice:
+        message = Message()
+
+    class Usage:
+        prompt_tokens = 3
+        completion_tokens = 2
+        total_tokens = 5
+
+    class Response:
+        choices = [Choice()]
+        usage = Usage()
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append("reasoning_effort" in kwargs)
+            if "reasoning_effort" in kwargs:
+                raise TypeError("unexpected keyword argument 'reasoning_effort'")
+            return Response()
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.chat = Chat()
+
+    monkeypatch.setattr("patchling.core.OpenAI", Client)
+    cache = RelevanceCache()
+    files = {"a.py": "x = 1\n"}
+    first = filter_relevant(files, "task", model="m", cache=cache, api_key="k")
+    second = filter_relevant(files, "task", model="m", cache=cache, api_key="k")
+    assert calls == [True, False]
+    assert first.decisions[0].cached is False
+    assert first.decisions[0].decision == "no"
+    assert second.decisions[0].cached is True
+    assert second.decisions[0].decision == "no"
+    common = dict(
+        model="m",
+        task="task",
+        content="x = 1\n",
+        path="a.py",
+        max_output_tokens=1024,
+        prompt_version=PROMPT_VERSION,
+        mode="full",
+        note="",
+    )
+    low = RelevanceCache.make_key(**common, effort="low")
+    omitted = RelevanceCache.make_key(**common, effort="")
+    assert cache.get(low) is None
+    assert cache.get(omitted)["decision"] == "no"
+
+
 def test_envelope_errors_fail_open_and_are_not_cached():
     payloads = [
         {"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
@@ -1322,6 +1540,7 @@ def test_envelope_errors_fail_open_and_are_not_cached():
         {"choices": [{"message": {}}]},
         "this is not json",
         None,
+        {"choices": [{"message": {"content": ["no"]}}]},
     ]
     for payload in payloads:
         calls = {"n": 0}
@@ -1492,8 +1711,8 @@ def test_cli_apply_uses_the_full_original_file_map(tmp_path, monkeypatch):
 
 # sha256 of tests/fixtures/parity/relevance.json. That file is a byte-identical
 # copy of test/fixtures/parity/relevance.json on 255BITS/patchling branch
-# cursor/relevance-filter-915b. A mismatch fails CI.
-RELEVANCE_FIXTURE_SHA256 = "90b7299375518fbc6cb9bfeacb536f46f95c17ed72f8f66d063592bfdaec4665"
+# cursor/relevance-filter-followup-915b. A mismatch fails CI.
+RELEVANCE_FIXTURE_SHA256 = "6976ad71714be0138a6043d9bdeb724abe34a65515f8389913dca10a0c48c4f2"
 
 
 def test_vendored_relevance_fixture_matches_library():
@@ -1624,6 +1843,19 @@ def test_vendored_relevance_fixture_matches_library():
             sample = b"a" * case["pad"] + tail
         expect = case.get("binary", case.get("expect_binary"))
         assert is_binary_content(sample) is expect, case
+
+    bom = data.get("bom")
+    if bom:
+        from patchling.relevance import _prepare_content
+
+        sample = bytes(bom["bytes"])
+        binary, text = _prepare_content(sample)
+        assert binary is False
+        assert text == bom["text"]
+        assert text.startswith("\ufeff")
+        assert count_tokens(text) == bom["tokens"]
+        assert _truncate_text(text, None, bom["maxTokens"], None) == bom["truncated"]
+        assert _truncate_text(text, None, bom["maxTokens"], None).startswith("\ufeff")
 
     ignore = data["ignore"]
     assert list(DEFAULT_SKIP_PATTERNS) == list(ignore["patterns"])

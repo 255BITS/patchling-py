@@ -21,6 +21,7 @@ from threading import Lock
 import shutil
 import base64
 import mimetypes
+import weakref
 
 import openai
 from openai import OpenAI
@@ -377,7 +378,7 @@ def call_llm(
         if reasoning_effort:
             request["reasoning_effort"] = reasoning_effort
         try:
-            return client.chat.completions.create(**request)
+            response = client.chat.completions.create(**request)
         except TypeError as exc:
             # Retry once, without the parameter, only when this call sent it
             # and the error says the parameter is unsupported. A generic
@@ -385,8 +386,51 @@ def call_llm(
             # reasoning_effort is made exactly once.
             if "reasoning_effort" in request and _provider_rejected_reasoning_effort(exc):
                 request.pop("reasoning_effort", None)
-                return client.chat.completions.create(**request)
+                response = client.chat.completions.create(**request)
+                # The caller asked for an effort this SDK refused. Record that
+                # nothing was sent so a relevance decision is not cached under
+                # the requested effort.
+                note_effort_sent(response, "")
+                return response
             raise
+        if "reasoning_effort" in request:
+            note_effort_sent(response, request["reasoning_effort"])
+        return response
+
+
+# Responses are not always able to grow an attribute (some SDK models are
+# slotted). The weak map covers ordinary objects; the attribute covers the rest.
+_effort_sent_for_response: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def note_effort_sent(response: Any, effort: str | None) -> None:
+    """Record the ``reasoning_effort`` value actually sent for ``response``.
+
+    ``""`` means the parameter was omitted after the client rejected it.
+    """
+    value = "" if not effort else str(effort)
+    try:
+        _effort_sent_for_response[response] = value
+    except TypeError:
+        pass
+    try:
+        object.__setattr__(response, "_patchling_effort_sent", value)
+    except (AttributeError, TypeError):
+        pass
+
+
+def effort_sent_for(response: Any):
+    """Effort recorded by :func:`note_effort_sent`, or ``None`` if unrecorded."""
+    if response is None:
+        return None
+    recorded = None
+    try:
+        recorded = _effort_sent_for_response.get(response)
+    except TypeError:
+        recorded = None
+    if recorded is None:
+        recorded = getattr(response, "_patchling_effort_sent", None)
+    return recorded
 
 
 def _provider_rejected_reasoning_effort(exc: BaseException) -> bool:
