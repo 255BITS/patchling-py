@@ -935,6 +935,60 @@ def _ask(
     return raw, prompt_tokens, completion_tokens, total_tokens, sent_effort
 
 
+# CamelCase names accepted by JS ``filterRelevant``. Most invert
+# ``SNAKE_CASE_OPTIONS`` in 255BITS/patchling ``src/filter.js`` at ad02203
+# (PR #7). ``sleep`` has no camelCase form. ``onDecision`` and
+# ``reasoningEffort`` have no ``filter_relevant`` parameter. ``retry_base_ms``
+# is a second snake_case spelling of ``retryBaseMs``; the Python parameter
+# is ``retry_backoff``.
+#
+# JS ``retries`` counts extra attempts (total = retries + 1). ``retryBaseMs``
+# is the millisecond base of an exponential wait,
+# ``min(base * 2**attempt, 30000)``, with no jitter. Python ``max_attempts``
+# is the total, and ``retry_backoff`` is that base in seconds
+# (``sleep(retry_backoff * 2**attempt)``), with no jitter and no cap.
+CAMEL_CASE_OPTIONS = {
+    "apiKey": "use api_key",
+    "baseUrl": "use base_url",
+    "maxBytes": "use max_bytes",
+    "maxTokens": "use max_tokens",
+    "onOversize": "use on_oversize",
+    "onBinary": "use on_binary",
+    "maxOutputTokens": "use max_output_tokens",
+    "ignore": (
+        "use skip_patterns (case-insensitive globs on the full relative path, "
+        "not a regex or a substring; ** crosses directories and * does not; "
+        "a sequence replaces DEFAULT_SKIP_PATTERNS and does not extend it; "
+        "None applies the defaults; "
+        "[] or () classifies every path, same as JS ignore=[] or ignore=false; "
+        "JS ignore=null also classifies every path, while Python None does not)"
+    ),
+    "retries": "retries=N (extra attempts) -> max_attempts=N+1 (total attempts)",
+    "retryBaseMs": (
+        "retryBaseMs=M (milliseconds, base delay) -> "
+        "retry_backoff=M/1000 (seconds, base delay)"
+    ),
+    "callLlm": "use call_llm",
+    "onDecision": "not supported in Python filter_relevant",
+    "reasoningEffort": "not supported in Python filter_relevant",
+}
+
+
+def _reject_unknown_options(kwargs):
+    """Reject JS camelCase options, then any other unexpected keyword.
+
+    CamelCase keys are reported together, with the Python spelling, before
+    any model call. Other unexpected keywords keep Python's usual message.
+    """
+    wrong = [key for key in kwargs if key in CAMEL_CASE_OPTIONS]
+    if wrong:
+        fixes = "; ".join(f"{key}: {CAMEL_CASE_OPTIONS[key]}" for key in wrong)
+        raise TypeError(f"filter_relevant options are snake_case in Python. {fixes}")
+    if kwargs:
+        key = next(iter(kwargs))
+        raise TypeError(f"filter_relevant() got an unexpected keyword argument {key!r}")
+
+
 def filter_relevant(
     files: dict,
     task: str,
@@ -954,6 +1008,7 @@ def filter_relevant(
     retry_backoff: float = DEFAULT_RETRY_BACKOFF,
     sleep: Optional[Callable[[float], None]] = None,
     call_llm: Optional[Callable] = None,
+    **kwargs,
 ):
     """Ask a cheap model which files are relevant to ``task``.
 
@@ -989,7 +1044,20 @@ def filter_relevant(
     Credentials resolve the same way as the rest of the library: explicit
     ``api_key`` / ``base_url``, then ``GPTDIFF_LLM_API_KEY`` and
     ``GPTDIFF_LLM_BASE_URL`` (including ``set_env`` overrides).
+
+    JavaScript camelCase options (``onBinary``, ``maxBytes``, ``ignore``,
+    ``retries``, ``retryBaseMs``, and every other key of
+    ``CAMEL_CASE_OPTIONS``) raise ``TypeError`` before any model call.
+    ``retries=N`` (extra attempts) is ``max_attempts=N+1`` (total attempts).
+    ``retryBaseMs=M`` (milliseconds, base delay) is
+    ``retry_backoff=M/1000`` (seconds, base delay). ``ignore`` is
+    ``skip_patterns``: a sequence replaces the defaults and does not extend
+    them, ``None`` applies the defaults, and ``[]`` or ``()`` classifies
+    every path (JS ``[]``, ``false``, and ``null``). ``onDecision`` and
+    ``reasoningEffort`` are not supported. Any other unknown keyword still
+    raises ``TypeError``.
     """
+    _reject_unknown_options(kwargs)
     if not isinstance(files, dict):
         raise TypeError("files must be a dict of path -> content")
     if not isinstance(task, str) or task.strip() == "":
