@@ -3,6 +3,7 @@
 No network. The injected client fails the test if ``filter_relevant`` calls it.
 """
 
+import inspect
 import re
 
 import pytest
@@ -31,6 +32,13 @@ JS_SNAKE_CASE_OPTIONS = {
 }
 
 _USE_NAME = re.compile(r"^use ([A-Za-z_][A-Za-z0-9_]*)\b")
+_ARROW_NAME = re.compile(r"->\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+# Vendored JS snake_case keys whose camelCase option has no filter_relevant parameter.
+JS_ONLY_UNSUPPORTED = {
+    "on_decision": "onDecision",
+    "reasoning_effort": "reasoningEffort",
+}
 
 
 def _recommended(guidance):
@@ -38,6 +46,22 @@ def _recommended(guidance):
     if match is None:
         return None
     return match.group(1)
+
+
+def _python_parameter(guidance):
+    """Parameter a Python guidance string tells the caller to pass.
+
+    ``None`` means the option is not supported and names no kwarg.
+    """
+    if guidance.startswith("not supported"):
+        return None
+    match = _USE_NAME.match(guidance)
+    if match is not None:
+        return match.group(1)
+    match = _ARROW_NAME.search(guidance)
+    if match is not None:
+        return match.group(1)
+    return None
 
 
 def _fail_if_called(*_args, **_kwargs):
@@ -99,41 +123,75 @@ def test_camel_case_options_raise_before_any_model_call():
 
 
 def test_python_and_js_option_maps_are_exact_inverses():
-    """Each JS ``snake -> use camel`` entry inverts to ``camel -> use snake``.
+    """Vendored JS map stays literal. JS-only keys are unsupported.
 
-    ``sleep`` has no camelCase spelling. ``retry_base_ms`` is an alias of
-    ``retryBaseMs``; the Python parameter behind that name is ``retry_backoff``.
+    ``sleep`` has no camelCase spelling. ``on_decision`` and
+    ``reasoning_effort`` name JS options with no ``filter_relevant``
+    parameter, so the Python message must not invent a kwarg.
+    ``retry_base_ms`` is a second JS spelling of ``retryBaseMs``; the
+    Python parameter behind that name is ``retry_backoff``. Every other
+    key is an exact inverse.
     """
+    parameters = set(inspect.signature(filter_relevant).parameters)
     js_pairs = {}
     aliases = {}
     for snake, guidance in JS_SNAKE_CASE_OPTIONS.items():
+        if snake in JS_ONLY_UNSUPPORTED:
+            camel = JS_ONLY_UNSUPPORTED[snake]
+            assert guidance == f"use {camel}"
+            assert CAMEL_CASE_OPTIONS[camel] == "not supported in Python filter_relevant"
+            assert _python_parameter(CAMEL_CASE_OPTIONS[camel]) is None
+            assert snake not in parameters
+            assert f"use {snake}" not in CAMEL_CASE_OPTIONS[camel]
+            continue
         camel = _recommended(guidance)
         if camel is None:
             assert snake == "sleep"
-            assert "not supported" in guidance
+            assert guidance.startswith("not supported")
             continue
         if camel in js_pairs:
             aliases.setdefault(camel, []).append(snake)
             continue
         js_pairs[camel] = snake
 
-    py_pairs = {
-        camel: _recommended(guidance)
-        for camel, guidance in CAMEL_CASE_OPTIONS.items()
-    }
-    assert None not in py_pairs.values()
+    py_pairs = {}
+    for camel, guidance in CAMEL_CASE_OPTIONS.items():
+        if camel in JS_ONLY_UNSUPPORTED.values():
+            continue
+        name = _python_parameter(guidance)
+        assert name is not None
+        assert name in parameters
+        py_pairs[camel] = name
+
     assert py_pairs == js_pairs
     assert aliases == {"retryBaseMs": ["retry_base_ms"]}
-    assert set(CAMEL_CASE_OPTIONS) == set(js_pairs)
+    assert "retry_base_ms" not in parameters
+    assert set(CAMEL_CASE_OPTIONS) == set(js_pairs) | set(JS_ONLY_UNSUPPORTED.values())
     for camel, snake in py_pairs.items():
         assert _recommended(JS_SNAKE_CASE_OPTIONS[snake]) == camel
         assert snake in CAMEL_CASE_OPTIONS[camel]
 
-    assert "max_attempts = retries + 1" in CAMEL_CASE_OPTIONS["retries"]
-    assert "retries = max_attempts - 1" in JS_SNAKE_CASE_OPTIONS["max_attempts"]
-    assert "retry_backoff = retryBaseMs / 1000" in CAMEL_CASE_OPTIONS["retryBaseMs"]
-    assert "retryBaseMs = retry_backoff * 1000" in JS_SNAKE_CASE_OPTIONS["retry_backoff"]
-    assert CAMEL_CASE_OPTIONS["ignore"].startswith("use skip_patterns")
+    assert CAMEL_CASE_OPTIONS["retries"] == (
+        "retries=N (extra attempts) -> max_attempts=N+1 (total attempts)"
+    )
+    assert JS_SNAKE_CASE_OPTIONS["max_attempts"] == (
+        "use retries, which counts extra attempts: retries = max_attempts - 1"
+    )
+    assert CAMEL_CASE_OPTIONS["retryBaseMs"] == (
+        "retryBaseMs=M (milliseconds, base delay) -> "
+        "retry_backoff=M/1000 (seconds, base delay)"
+    )
+    assert JS_SNAKE_CASE_OPTIONS["retry_backoff"] == (
+        "use retryBaseMs, in milliseconds: retryBaseMs = retry_backoff * 1000"
+    )
+    ignore = CAMEL_CASE_OPTIONS["ignore"]
+    assert ignore.startswith("use skip_patterns")
+    assert "replaces DEFAULT_SKIP_PATTERNS and does not extend it" in ignore
+    assert "None applies the defaults" in ignore
+    assert "[] or () classifies every path" in ignore
+    assert "ignore=false" in ignore
+    assert "not a regex or a substring" in ignore
+    assert "** crosses directories and * does not" in ignore
     assert JS_SNAKE_CASE_OPTIONS["skip_patterns"].startswith("use ignore")
     assert _recommended(JS_SNAKE_CASE_OPTIONS["retry_base_ms"]) == "retryBaseMs"
 
@@ -181,3 +239,114 @@ def test_snake_case_alias_of_retry_base_ms_is_an_unknown_keyword():
             call_llm=_fail_if_called,
             retry_base_ms=200,
         )
+
+
+class _YesResponse:
+    class _Usage:
+        prompt_tokens = 1
+        completion_tokens = 1
+        total_tokens = 2
+
+    class _Message:
+        content = "yes"
+
+    class _Choice:
+        message = None
+
+    def __init__(self):
+        choice = self._Choice()
+        choice.message = self._Message()
+        self.choices = [choice]
+        self.usage = self._Usage()
+
+
+def _classify(files, **options):
+    """Run the filter offline. Returns ``(result, call_count)``."""
+
+    def fake_call_llm(*_args, **_kwargs):
+        fake_call_llm.n += 1
+        return _YesResponse()
+
+    fake_call_llm.n = 0
+    result = filter_relevant(
+        files,
+        "task",
+        model="fake",
+        cache=False,
+        api_key="k",
+        call_llm=fake_call_llm,
+        **options,
+    )
+    return result, fake_call_llm.n
+
+
+def _ignored(result):
+    return {item.path for item in result.decisions if item.skipped_reason == "ignored"}
+
+
+def test_skip_patterns_none_applies_the_default_list():
+    result, calls = _classify(
+        {"uv.lock": "lock\n", "src/app.py": "x = 1\n"},
+        skip_patterns=None,
+    )
+    assert _ignored(result) == {"uv.lock"}
+    assert result.decisions[0].decision == "no"
+    assert "uv.lock" not in result.files
+    assert "src/app.py" in result.files
+    assert calls == 1
+
+
+@pytest.mark.parametrize("empty", [[], ()])
+def test_skip_patterns_empty_sequence_classifies_every_path(empty):
+    files = {"uv.lock": "lock\n", "dist/app.js": "x\n", "src/app.py": "x = 1\n"}
+    result, calls = _classify(files, skip_patterns=empty)
+    assert _ignored(result) == set()
+    assert set(result.files) == set(files)
+    assert calls == 3
+
+
+def test_skip_patterns_custom_list_replaces_defaults():
+    result, calls = _classify(
+        {"uv.lock": "lock\n", "notes.tmp": "temp\n", "src/app.py": "x = 1\n"},
+        skip_patterns=["*.tmp"],
+    )
+    assert _ignored(result) == {"notes.tmp"}
+    assert "uv.lock" in result.files
+    assert "notes.tmp" not in result.files
+    assert calls == 2
+
+
+def test_skip_patterns_match_globs_not_regex_or_substring():
+    # ``*`` does not cross ``/``, the match is the whole path, and case is folded.
+    result, _calls = _classify(
+        {
+            "uv.lock": "a\n",
+            "dir/uv.lock": "a\n",
+            "file.lock.txt": "a\n",
+            "Notes.TMP": "a\n",
+            "src/keep.py": "a\n",
+        },
+        skip_patterns=["*.lock", "*.TMP"],
+    )
+    assert _ignored(result) == {"uv.lock", "Notes.TMP"}
+
+    # ``**`` crosses directories.
+    result, _calls = _classify(
+        {"dir/uv.lock": "a\n", "uv.lock": "a\n", "src/keep.py": "a\n"},
+        skip_patterns=["**/uv.lock"],
+    )
+    assert _ignored(result) == {"dir/uv.lock", "uv.lock"}
+
+    # ``.*`` as a regex would match every name. As a glob it is a leading dot.
+    result, _calls = _classify(
+        {"a.py": "a\n", ".env": "a\n", "dir/.env": "a\n"},
+        skip_patterns=[".*"],
+    )
+    assert _ignored(result) == {".env"}
+
+    # A bare token is not a substring of a longer name.
+    result, _calls = _classify(
+        {"uv.lock": "a\n", "lock": "a\n"},
+        skip_patterns=["lock"],
+    )
+    assert _ignored(result) == {"lock"}

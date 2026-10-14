@@ -935,11 +935,18 @@ def _ask(
     return raw, prompt_tokens, completion_tokens, total_tokens, sent_effort
 
 
-# CamelCase names accepted by JS ``filterRelevant``, mapped to the Python
-# spelling. Inverse of ``SNAKE_CASE_OPTIONS`` in 255BITS/patchling
-# ``src/filter.js`` at ad02203 (PR #7). ``sleep`` has no camelCase form.
-# ``retry_base_ms`` is a second snake_case spelling of ``retryBaseMs``; the
-# Python parameter is ``retry_backoff``.
+# CamelCase names accepted by JS ``filterRelevant``. Most invert
+# ``SNAKE_CASE_OPTIONS`` in 255BITS/patchling ``src/filter.js`` at ad02203
+# (PR #7). ``sleep`` has no camelCase form. ``onDecision`` and
+# ``reasoningEffort`` have no ``filter_relevant`` parameter. ``retry_base_ms``
+# is a second snake_case spelling of ``retryBaseMs``; the Python parameter
+# is ``retry_backoff``.
+#
+# JS ``retries`` counts extra attempts (total = retries + 1). ``retryBaseMs``
+# is the millisecond base of an exponential wait,
+# ``min(base * 2**attempt, 30000)``, with no jitter. Python ``max_attempts``
+# is the total, and ``retry_backoff`` is that base in seconds
+# (``sleep(retry_backoff * 2**attempt)``), with no jitter and no cap.
 CAMEL_CASE_OPTIONS = {
     "apiKey": "use api_key",
     "baseUrl": "use base_url",
@@ -949,19 +956,21 @@ CAMEL_CASE_OPTIONS = {
     "onBinary": "use on_binary",
     "maxOutputTokens": "use max_output_tokens",
     "ignore": (
-        "use skip_patterns (a sequence replaces DEFAULT_SKIP_PATTERNS; "
-        "an empty sequence classifies every path)"
+        "use skip_patterns (case-insensitive globs on the full relative path, "
+        "not a regex or a substring; ** crosses directories and * does not; "
+        "a sequence replaces DEFAULT_SKIP_PATTERNS and does not extend it; "
+        "None applies the defaults; "
+        "[] or () classifies every path, same as JS ignore=[] or ignore=false; "
+        "JS ignore=null also classifies every path, while Python None does not)"
     ),
-    "retries": (
-        "use max_attempts, which counts total attempts: "
-        "max_attempts = retries + 1"
-    ),
+    "retries": "retries=N (extra attempts) -> max_attempts=N+1 (total attempts)",
     "retryBaseMs": (
-        "use retry_backoff, in seconds: retry_backoff = retryBaseMs / 1000"
+        "retryBaseMs=M (milliseconds, base delay) -> "
+        "retry_backoff=M/1000 (seconds, base delay)"
     ),
     "callLlm": "use call_llm",
-    "onDecision": "use on_decision",
-    "reasoningEffort": "use reasoning_effort",
+    "onDecision": "not supported in Python filter_relevant",
+    "reasoningEffort": "not supported in Python filter_relevant",
 }
 
 
@@ -1038,11 +1047,15 @@ def filter_relevant(
 
     JavaScript camelCase options (``onBinary``, ``maxBytes``, ``ignore``,
     ``retries``, ``retryBaseMs``, and every other key of
-    ``CAMEL_CASE_OPTIONS``) raise ``TypeError`` before any model call. The
-    message names each one and the Python spelling. ``retries`` is
-    ``max_attempts = retries + 1``. ``retryBaseMs`` is
-    ``retry_backoff = retryBaseMs / 1000`` seconds. ``ignore`` is
-    ``skip_patterns``. Any other unknown keyword still raises ``TypeError``.
+    ``CAMEL_CASE_OPTIONS``) raise ``TypeError`` before any model call.
+    ``retries=N`` (extra attempts) is ``max_attempts=N+1`` (total attempts).
+    ``retryBaseMs=M`` (milliseconds, base delay) is
+    ``retry_backoff=M/1000`` (seconds, base delay). ``ignore`` is
+    ``skip_patterns``: a sequence replaces the defaults and does not extend
+    them, ``None`` applies the defaults, and ``[]`` or ``()`` classifies
+    every path (JS ``[]``, ``false``, and ``null``). ``onDecision`` and
+    ``reasoningEffort`` are not supported. Any other unknown keyword still
+    raises ``TypeError``.
     """
     _reject_unknown_options(kwargs)
     if not isinstance(files, dict):
