@@ -21,7 +21,8 @@ class DummyResponse:
         self.choices = [DummyChoice(content)]
         self.usage = DummyUsage(prompt_tokens, completion_tokens, total_tokens)
 
-def test_fail_diff_through_call_llm(monkeypatch):
+def test_fail_diff_through_call_llm(monkeypatch, fake_tiktoken):
+    # fake_tiktoken (tests/conftest.py) keeps this offline on a cold cache; from #2.
     diff_str = """```diff
 DIFF 1
 ```
@@ -43,15 +44,6 @@ DIFF 2"""
 
     # Patch call_llm in patchling.core with our dummy function.
     monkeypatch.setattr("patchling.core.call_llm", dummy_call_llm)
-
-    # Stub the tiktoken encoder so the test needs no network or warm cache.
-    # get_encoding("o200k_base") downloads the BPE file on a cold cache.
-    # Carried over from #2.
-    class DummyEnc:
-        def encode(self, text):
-            return [0] * len(text)
-
-    monkeypatch.setattr("patchling.core.tiktoken.get_encoding", lambda name: DummyEnc())
 
     # generate_diff calls call_llm_for_diff internally, which now uses our dummy_call_llm.
     result = generate_diff("dummy environment", "dummy goal", model="test-model")
