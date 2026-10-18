@@ -214,3 +214,96 @@ def test_text_helpers_match_the_js_contract():
     blocks = extract_diff_blocks("prose\n```diff\n--- a/a.py\n+++ b/a.py\n```\n")
     assert len(blocks) == 1
     assert "--- a/a.py" in blocks[0]
+
+
+# Relevance helpers and filter defaults, exported at the package level the
+# way src/index.js exports them in 255BITS/patchling (JS names in snake_case;
+# constants keep the JS DEFAULT_FILTER_* names).
+RELEVANCE_EXPORTS = {
+    "count_tokens": "count_tokens",
+    "is_binary_content": "is_binary_content",
+    "parse_relevance_answer": "parse_relevance_answer",
+    "path_is_skipped": "path_is_skipped",
+    "format_filter_summary": "format_filter_summary",
+    "dump_decisions": "dump_decisions",
+    "DEFAULT_FILTER_MODEL": "DEFAULT_FILTER_MODEL",
+    "DEFAULT_FILTER_CONCURRENCY": "DEFAULT_CONCURRENCY",
+    "DEFAULT_FILTER_MAX_BYTES": "DEFAULT_MAX_BYTES",
+    "DEFAULT_FILTER_MAX_TOKENS": "DEFAULT_MAX_TOKENS",
+    "DEFAULT_FILTER_MAX_OUTPUT_TOKENS": "DEFAULT_MAX_OUTPUT_TOKENS",
+    "DEFAULT_FILTER_REASONING_EFFORT": "REASONING_EFFORT",
+    "DEFAULT_SKIP_PATTERNS": "DEFAULT_SKIP_PATTERNS",
+    "PROMPT_VERSION": "PROMPT_VERSION",
+    "FILTER_PROMPT_VERSION": "PROMPT_VERSION",
+}
+
+
+def _relevance_fixture():
+    import json
+
+    path = Path(__file__).resolve().parent / "fixtures" / "parity" / "relevance.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_relevance_helpers_are_exported_from_the_package():
+    import patchling.relevance as relevance
+
+    for public, internal in RELEVANCE_EXPORTS.items():
+        assert hasattr(patchling, public), public
+        assert public in patchling.__all__, public
+        assert getattr(patchling, public) is getattr(relevance, internal), public
+
+
+def test_all_names_resolve_and_are_unique():
+    assert len(patchling.__all__) == len(set(patchling.__all__))
+    for name in patchling.__all__:
+        assert hasattr(patchling, name), name
+
+
+def test_count_tokens_matches_the_shared_token_estimate_fixture():
+    estimate = _relevance_fixture()["tokenEstimate"]
+    assert estimate["rule"] == "ceil(code_points/4)"
+    assert patchling.count_tokens("") == estimate["empty"]
+    assert estimate["examples"], "fixture has no tokenEstimate examples"
+    for example in estimate["examples"]:
+        assert patchling.count_tokens(example["text"]) == example["tokens"], example["text"]
+
+
+def test_filter_defaults_match_the_shared_fixture():
+    fixture = _relevance_fixture()
+    assert str(patchling.PROMPT_VERSION) == str(fixture["promptVersion"])
+    assert patchling.FILTER_PROMPT_VERSION == patchling.PROMPT_VERSION
+    assert patchling.DEFAULT_FILTER_MAX_OUTPUT_TOKENS == fixture["maxOutputTokens"]
+    assert patchling.DEFAULT_FILTER_REASONING_EFFORT == fixture["reasoningEffort"]
+    assert list(patchling.DEFAULT_SKIP_PATTERNS) == fixture["ignore"]["patterns"]
+    assert patchling.DEFAULT_FILTER_CONCURRENCY == 8
+    assert patchling.DEFAULT_FILTER_MAX_BYTES == 200_000
+    assert patchling.DEFAULT_FILTER_MAX_TOKENS == 12_000
+
+
+def test_exported_relevance_helpers_behave(tmp_path):
+    import json
+
+    assert patchling.is_binary_content(b"a\x00b") is True
+    assert patchling.is_binary_content("plain text\n") is False
+    assert patchling.parse_relevance_answer("Yes.")[0] == "yes"
+    assert patchling.parse_relevance_answer("maybe")[0] is None
+    assert patchling.path_is_skipped("web/package-lock.json", patchling.DEFAULT_SKIP_PATTERNS)
+    assert not patchling.path_is_skipped("src/app.py", patchling.DEFAULT_SKIP_PATTERNS)
+
+    result = patchling.FilterRelevantResult(
+        files={"a.py": "x = 1\n"},
+        decisions=[
+            patchling.RelevanceDecision(path="a.py", decision="yes", tokens=5),
+            patchling.RelevanceDecision(path="b.py", decision="no", tokens=3),
+        ],
+        model="unit-model",
+    )
+    summary = patchling.format_filter_summary(result)
+    assert summary.startswith("Relevance filter (unit-model): kept 1/2 files, 8 tokens")
+
+    out = tmp_path / "decisions.json"
+    patchling.dump_decisions(result, out)
+    dumped = json.loads(out.read_text(encoding="utf-8"))
+    assert dumped["files"] == ["a.py"]
+    assert [d["path"] for d in dumped["decisions"]] == ["a.py", "b.py"]

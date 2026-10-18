@@ -23,18 +23,44 @@ from .core import (
 )
 from .env import DEFAULT_BASE_URL, DEFAULT_MODEL, get_env, set_env
 from .relevance import (
+    DEFAULT_CONCURRENCY as DEFAULT_FILTER_CONCURRENCY,
+    DEFAULT_FILTER_MODEL,
+    DEFAULT_MAX_BYTES as DEFAULT_FILTER_MAX_BYTES,
+    DEFAULT_MAX_OUTPUT_TOKENS as DEFAULT_FILTER_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_TOKENS as DEFAULT_FILTER_MAX_TOKENS,
+    DEFAULT_SKIP_PATTERNS,
+    PROMPT_VERSION,
+    REASONING_EFFORT as DEFAULT_FILTER_REASONING_EFFORT,
     FilterRelevantResult,
     RelevanceCache,
     RelevanceDecision,
+    count_tokens,
+    dump_decisions,
     filter_relevant,
+    format_filter_summary,
+    is_binary_content,
+    parse_relevance_answer,
+    path_is_skipped,
 )
+
+# Same value as PROMPT_VERSION, under the second name the JS package exports.
+FILTER_PROMPT_VERSION = PROMPT_VERSION
 
 __version__ = "0.9.3"
 
 __all__ = [
     "__version__",
     "DEFAULT_BASE_URL",
+    "DEFAULT_FILTER_CONCURRENCY",
+    "DEFAULT_FILTER_MAX_BYTES",
+    "DEFAULT_FILTER_MAX_OUTPUT_TOKENS",
+    "DEFAULT_FILTER_MAX_TOKENS",
+    "DEFAULT_FILTER_MODEL",
+    "DEFAULT_FILTER_REASONING_EFFORT",
     "DEFAULT_MODEL",
+    "DEFAULT_SKIP_PATTERNS",
+    "FILTER_PROMPT_VERSION",
+    "PROMPT_VERSION",
     "FilterRelevantResult",
     "RelevanceCache",
     "RelevanceDecision",
@@ -44,12 +70,18 @@ __all__ = [
     "call_llm",
     "call_llm_for_diff",
     "color_code_diff",
+    "count_tokens",
+    "dump_decisions",
     "extract_diff_blocks",
     "filter_relevant",
+    "format_filter_summary",
     "generate_diff",
     "get_env",
+    "is_binary_content",
     "load_project_files",
     "parse_diff_per_file",
+    "parse_relevance_answer",
+    "path_is_skipped",
     "resolve_api_key",
     "resolve_base_url",
     "save_files",
