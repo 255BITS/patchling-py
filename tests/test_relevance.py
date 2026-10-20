@@ -589,7 +589,7 @@ def test_cli_filter_flags_parse():
     assert args.filter_decisions == "decisions.json"
 
 
-def test_cli_filter_narrows_the_prompt(tmp_path, monkeypatch):
+def test_cli_filter_narrows_the_prompt(tmp_path, monkeypatch, fake_tiktoken):
     project = tmp_path / "proj"
     project.mkdir()
     (project / "keep.py").write_text("def keep():\n    return 1\n")
@@ -1744,7 +1744,7 @@ def test_call_llm_retries_only_unsupported_reasoning_effort(monkeypatch):
     assert calls == ["low", None]
 
 
-def test_cli_apply_uses_the_full_original_file_map(tmp_path, monkeypatch):
+def test_cli_apply_uses_the_full_original_file_map(tmp_path, monkeypatch, fake_tiktoken):
     project = tmp_path / "proj"
     project.mkdir()
     (project / "keep.py").write_text("KEEP_ON_DISK\n")
