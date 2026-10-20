@@ -4,9 +4,6 @@ docs_dir: docs
 site_dir: site
 strict: true
 
-extra_css:
-  - stylesheets/extra.css
-
 theme:
   name: material
   custom_dir: overrides
