@@ -779,11 +779,13 @@ def smartapply(
     """
     if model is None:
         model = resolve_model(None)
-    parsed_diffs = parse_diff_per_file(diff_text)    
-    print("-" * 40)
-    print("SMARTAPPLY")
-    print(diff_text)
-    print("-" * 40)
+    parsed_diffs = parse_diff_per_file(diff_text)
+    # Library calls stay quiet; the diff echo is debug output for --verbose.
+    if VERBOSE:
+        print("-" * 40)
+        print("SMARTAPPLY")
+        print(diff_text)
+        print("-" * 40)
 
     # Copy so a failure cannot hand back a half-mutated caller dict, and so
     # the input is left alone as the docstring promises.
