@@ -1,5 +1,5 @@
 site_name: Patchling
-site_url: https://255bits.github.io/patchling-py/
+site_url: https://gptdiff.255labs.xyz/
 docs_dir: docs
 site_dir: site
 strict: true
