@@ -12,7 +12,7 @@ import os
 # Used by ``generate_diff`` and ``smartapply`` when ``GPTDIFF_MODEL`` is unset.
 # Same id as the JS package's DEFAULT_MODEL. The previous default,
 # "deepseek-reasoner", is not listed on NanoGPT (the default base URL).
-DEFAULT_MODEL: str = "xiaomi/mimo-v2.6-pro"
+DEFAULT_MODEL: str = "deepseek/deepseek-v4.1-flash-1017"
 DEFAULT_BASE_URL: str = "https://nano-gpt.com/api/v1/"
 
 _overrides: dict[str, str] = {}

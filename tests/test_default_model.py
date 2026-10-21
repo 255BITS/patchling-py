@@ -3,12 +3,12 @@ import patchling
 from patchling import core
 from patchling.env import DEFAULT_MODEL
 
-NEW_DEFAULT = "xiaomi/mimo-v2.6-pro"
+NEW_DEFAULT = "deepseek/deepseek-v4.1-flash-1017"
 # Retired on NanoGPT (HTTP 410) / never listed there; neither may be the default.
 RETIRED = ("xiaomi/mimo-v2.5-pro-ultraspeed", "deepseek-reasoner")
 
 
-def test_default_model_is_mimo_v2_6_pro():
+def test_default_model_is_deepseek_v4_1_flash_1017():
     assert DEFAULT_MODEL == NEW_DEFAULT
     assert patchling.DEFAULT_MODEL == NEW_DEFAULT
 
