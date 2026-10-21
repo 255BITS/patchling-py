@@ -419,7 +419,7 @@ def main(argv=None) -> int:
 
     diff_full = diff_filtered = None
     if not args.skip_diff:
-        diff_model = args.diff_model or os.getenv("GPTDIFF_MODEL", "deepseek-reasoner")
+        diff_model = args.diff_model or os.getenv("GPTDIFF_MODEL", "xiaomi/mimo-v2.6-pro")
         apply_model = args.apply_model or os.getenv("GPTDIFF_SMARTAPPLY_MODEL") or diff_model
         kept = yes_files(files, decisions)
         print(f"Running generate_diff + smartapply on all {len(files)} files...")
