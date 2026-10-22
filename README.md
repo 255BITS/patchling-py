@@ -125,7 +125,7 @@ This is the pattern [nanoodle.com](https://nanoodle.com) runs in the browser (vi
 | `openai/gpt-5-mini` | Applying diffs (`smartapply`) | A cheap `GPTDIFF_SMARTAPPLY_MODEL`; $0.25 / $2 per 1M tokens |
 | `gemini-2.5-flash-lite` | Simple text changes | $0.10 / $0.40 per 1M tokens |
 
-Ids and prices are from NanoGPT's public model list (`https://nano-gpt.com/api/v1/models?detailed=true`) as of 2026-10-21. Any listed id works with `--model`.
+Ids and prices are from NanoGPT's public model list (`https://nano-gpt.com/api/v1/models?detailed=true`) as of 2026-10-21. Use `--model` to select a compatible text-generation model.
 
 ```bash
 export GPTDIFF_MODEL='deepseek/deepseek-v4.1-flash-1017'

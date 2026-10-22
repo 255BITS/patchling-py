@@ -63,7 +63,7 @@ patchling "Refactor legacy API" --temperature 0.3
 ### Model Selection
 `--model`
 **Choose LLM model (default: $GPTDIFF_MODEL or `deepseek/deepseek-v4.1-flash-1017`, which is `DEFAULT_MODEL`)**
-*Options:* any id from NanoGPT's model list, for example `xiaomi/mimo-v2.6-pro` or `anthropic/claude-sonnet-4.6` (complex changes) and `gemini-2.5-flash-lite` (simple, cheap)
+*Options:* a compatible text-generation model, for example `xiaomi/mimo-v2.6-pro` or `anthropic/claude-sonnet-4.6` (complex changes) and `gemini-2.5-flash-lite` (simple, cheap)
 *Example:*
 ```bash
 patchling "Translate docs to French" --model gemini-2.5-flash-lite
