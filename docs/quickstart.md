@@ -40,14 +40,14 @@ patchling "Add type hints to all functions" --apply
 **Expected output:**
 ```
 Reading project files...
-Generating diff with gemini-3-pro-preview...
+Generating diff with deepseek/deepseek-v4.1-flash-1017...
 Applying changes...
 ✅ Successfully applied patch to 3 files
 ```
 
-**Tip:** The default model (`gemini-3-pro-preview`) works great for most tasks. For very simple changes, use a faster model:
+**Tip:** The default model is `deepseek/deepseek-v4.1-flash-1017` (`DEFAULT_MODEL`; set `GPTDIFF_MODEL` to change it). For very simple changes you can pick a cheaper model:
 ```bash
-patchling "Fix typos in comments" --model gemini-2.0-flash --apply
+patchling "Fix typos in comments" --model gemini-2.5-flash-lite --apply
 ```
 
 ## Step 4: Review and Commit

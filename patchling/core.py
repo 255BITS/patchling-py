@@ -997,7 +997,7 @@ def call_llm_for_apply(
         ...     file_diff='''@@ -1 +1 @@
         ...                  -def old()
         ...                  +def new()''',
-        ...     model='deepseek-reasoner'
+        ...     model='deepseek/deepseek-v4.1-flash-1017'
         ... )
         >>> print(updated)
         def new(): pass"""
