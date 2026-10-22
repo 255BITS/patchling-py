@@ -447,7 +447,11 @@ Agent loops transform Patchling from a productivity tool into an autonomous code
 
 See [Agent Loops](examples/automation.md) for battle-tested patterns and bash recipes.
 
-For the smartapply feature, you can set separate variables:
- - `GPTDIFF_SMARTAPPLY_MODEL`: Model for smartapply (for example `openai/gpt-5-mini`; defaults to `GPTDIFF_MODEL` if not set)
- - `GPTDIFF_SMARTAPPLY_API_KEY`: API key for smartapply (defaults to `GPTDIFF_LLM_API_KEY` if not set)
- - `GPTDIFF_SMARTAPPLY_BASE_URL`: Base URL for smartapply (defaults to `GPTDIFF_LLM_BASE_URL` if not set)
+**Library `smartapply()`** does not read any `GPTDIFF_SMARTAPPLY_*` variable. Its model is the explicit `model` argument, else `GPTDIFF_MODEL`, else `DEFAULT_MODEL`. The API key and base URL come from the `api_key` / `base_url` arguments, else `GPTDIFF_LLM_API_KEY` and `GPTDIFF_LLM_BASE_URL`.
+
+**CLI only (`patchling --apply`).** The apply step reads separate variables:
+ - `GPTDIFF_SMARTAPPLY_MODEL`: Model for the apply step. `--applymodel` overrides it. If it is unset or blank, the CLI uses `openai/gpt-4.1-mini`. It never falls back to `GPTDIFF_MODEL` or `--model`.
+ - `GPTDIFF_SMARTAPPLY_API_KEY`: API key for the apply step (defaults to `GPTDIFF_LLM_API_KEY` if not set)
+ - `GPTDIFF_SMARTAPPLY_BASE_URL`: Base URL for the apply step (defaults to `GPTDIFF_LLM_BASE_URL`, then `https://nano-gpt.com/api/v1/`, if not set)
+
+See the [CLI reference](cli.md) for the full `--apply` behavior.

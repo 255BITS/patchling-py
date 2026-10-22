@@ -78,7 +78,7 @@ patchling "Update config system" config/ utils/config_loader.py
 ```
 
 `--max_tokens <number>`: Set the maximum number of tokens for the API response (default: 30000)
-`--applymodel <model_name>`: Specify the model to use for applying the diff (used in smartapply). If not specified, defaults to the model from `--model` or `GPTDIFF_MODEL`.
+`--applymodel <model_name>`: Model used by `--apply` to rewrite each changed file (smartapply). If not given, the CLI uses `GPTDIFF_SMARTAPPLY_MODEL` when it is set and non-blank, and otherwise `openai/gpt-4.1-mini`. It does **not** fall back to `--model` or `GPTDIFF_MODEL`, which only choose the model that generates the diff. With `--apply`, every file in the diff is sent to this model, except deleted files (`+++ /dev/null`), which are removed without a model call. Each request uses `--max_tokens`.
 `--nowarn`: Disable the warning and confirmation prompt for large token usage
 `--verbose`: Enable verbose output for detailed information during execution
 
@@ -120,10 +120,12 @@ Patchling uses the following environment variables:
 - `GPTDIFF_MODEL`: Default model for generating diffs (default: `deepseek/deepseek-v4.1-flash-1017`, exported as `DEFAULT_MODEL`)
 - `GPTDIFF_FILTER_MODEL`: Cheap model for `--filter-relevant` (default: xiaomi/mimo-v2.6-flash). Flask recall 1.0 and ~0.8x overhead figures for that default are UNVERIFIED.
 
-For the smartapply feature, you can set separate variables:
-- `GPTDIFF_SMARTAPPLY_MODEL`: Model for smartapply (for example `openai/gpt-5-mini`; defaults to `GPTDIFF_MODEL` if not set)
+For the CLI's `--apply` step (smartapply), you can set separate variables:
+- `GPTDIFF_SMARTAPPLY_MODEL`: Model for applying diffs. `--applymodel` overrides it. If it is unset or blank, the CLI uses `openai/gpt-4.1-mini`, not `GPTDIFF_MODEL`.
 - `GPTDIFF_SMARTAPPLY_API_KEY`: API key for smartapply (defaults to `GPTDIFF_LLM_API_KEY` if not set)
-- `GPTDIFF_SMARTAPPLY_BASE_URL`: Base URL for smartapply (defaults to `GPTDIFF_LLM_BASE_URL` if not set)
+- `GPTDIFF_SMARTAPPLY_BASE_URL`: Base URL for smartapply (defaults to `GPTDIFF_LLM_BASE_URL`, then `https://nano-gpt.com/api/v1/`, if not set)
+
+These variables are read by the CLI only. The Python `smartapply()` function uses its `model` argument, or else `GPTDIFF_MODEL`, then `DEFAULT_MODEL`. It also tries a deterministic patch first and calls the model only for files that patch cannot handle.
 
 These allow you to use different models or credentials for generating and applying diffs—perfect for virtual team flexibility!
 
