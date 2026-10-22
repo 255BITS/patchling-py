@@ -328,7 +328,7 @@ except Exception as e:
    
 2. **Model Selection**:
    - `deepseek/deepseek-v4.1-flash-1017`: the default (`DEFAULT_MODEL`) for generating diffs
-   - `openai/gpt-5-mini`: a cheap choice for smartapply (`GPTDIFF_SMARTAPPLY_MODEL`)
+   - `openai/gpt-5-mini`: a cheap choice for smartapply (pass it as `model=`; the CLI reads `GPTDIFF_SMARTAPPLY_MODEL`)
    - `gemini-2.5-flash-lite`: a cheap choice for simple text modifications
 
 ## Edge Case Handling
