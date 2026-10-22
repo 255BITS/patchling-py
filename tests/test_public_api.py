@@ -78,7 +78,7 @@ def test_py_typed_marker_is_packaged():
 
 
 def test_defaults_match_the_library_fallback():
-    assert DEFAULT_MODEL == "deepseek-reasoner"
+    assert DEFAULT_MODEL == "deepseek/deepseek-v4.1-flash-1017"
     assert DEFAULT_BASE_URL == "https://nano-gpt.com/api/v1/"
 
 

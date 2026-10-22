@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import os
 
-# Historical Python default. The JS package currently advertises a different
-# model string; this constant is the one ``generate_diff`` and ``smartapply``
-# use when ``GPTDIFF_MODEL`` is unset, so existing callers keep their model.
-DEFAULT_MODEL: str = "deepseek-reasoner"
+# Used by ``generate_diff`` and ``smartapply`` when ``GPTDIFF_MODEL`` is unset.
+# Same id as the JS package's DEFAULT_MODEL. The previous default,
+# "deepseek-reasoner", is not listed on NanoGPT (the default base URL).
+DEFAULT_MODEL: str = "deepseek/deepseek-v4.1-flash-1017"
 DEFAULT_BASE_URL: str = "https://nano-gpt.com/api/v1/"
 
 _overrides: dict[str, str] = {}

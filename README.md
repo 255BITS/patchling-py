@@ -135,7 +135,7 @@ export GPTDIFF_SMARTAPPLY_MODEL='gpt5-mini'
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GPTDIFF_LLM_API_KEY` | API key (required) | — |
-| `GPTDIFF_MODEL` | Model for diff generation | `gemini-3-pro-preview` |
+| `GPTDIFF_MODEL` | Model for diff generation | `deepseek/deepseek-v4.1-flash-1017` (`DEFAULT_MODEL`) |
 | `GPTDIFF_SMARTAPPLY_MODEL` | Model for applying diffs | `GPTDIFF_MODEL` |
 | `GPTDIFF_LLM_BASE_URL` | OpenAI-compatible endpoint | `https://nano-gpt.com/api/v1/` |
 | `GPTDIFF_FILTER_MODEL` | Cheap model for `filter_relevant` | `xiaomi/mimo-v2.6-flash` (Flask recall 1.0 / ~0.8x overhead: UNVERIFIED) |

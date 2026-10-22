@@ -747,7 +747,7 @@ def smartapply(
     Args:
         diff_text: Unified diff string compatible with git apply
         files: Dictionary of {file_path: content} to modify
-        model: LLM to use for conflict resolution (default: deepseek-reasoner)
+        model: LLM to use for conflict resolution (default: DEFAULT_MODEL, deepseek/deepseek-v4.1-flash-1017)
         api_key: Optional API key override
         base_url: Optional API base URL override
 

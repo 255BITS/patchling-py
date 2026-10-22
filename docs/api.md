@@ -9,7 +9,7 @@
 def generate_diff(
     environment: str,
     goal: str,
-    model: str | None = None,  # GPTDIFF_MODEL, else patchling.DEFAULT_MODEL ("deepseek-reasoner")
+    model: str | None = None,  # GPTDIFF_MODEL, else patchling.DEFAULT_MODEL ("deepseek/deepseek-v4.1-flash-1017")
     temperature: float = 1.0,
     max_tokens: int = 32000,
     api_key: str | None = None,  # Can also set via GPTDIFF_LLM_API_KEY or set_env
@@ -166,7 +166,7 @@ from patchling import (
     resolve_base_url,      # explicit URL, else GPTDIFF_LLM_BASE_URL, else DEFAULT_BASE_URL
     get_env,               # set_env override, then the process environment
     set_env,               # register an override; pass None to clear it
-    DEFAULT_MODEL,         # "deepseek-reasoner"
+    DEFAULT_MODEL,         # "deepseek/deepseek-v4.1-flash-1017"
     DEFAULT_BASE_URL,      # "https://nano-gpt.com/api/v1/"
 )
 ```

@@ -62,7 +62,7 @@ patchling "Refactor legacy API" --temperature 0.3
 
 ### Model Selection
 `--model`
-**Choose LLM model (default: $GPTDIFF_MODEL or `deepseek-reasoner`, which is `DEFAULT_MODEL`)**
+**Choose LLM model (default: $GPTDIFF_MODEL or `deepseek/deepseek-v4.1-flash-1017`, which is `DEFAULT_MODEL`)**
 *Options:* `gemini-3-pro-preview` (recommended), `gpt-4o` (complex), `gemini-2.0-flash` (fast)
 *Example:*
 ```bash
@@ -117,7 +117,7 @@ patchling "Remove deprecated features" --nobeep
 Patchling uses the following environment variables:
 - `GPTDIFF_LLM_API_KEY`: API key for the LLM service
 - `GPTDIFF_LLM_BASE_URL`: Base URL for the LLM API (default: https://nano-gpt.com/api/v1/)
-- `GPTDIFF_MODEL`: Default model for generating diffs (default: `deepseek-reasoner`, exported as `DEFAULT_MODEL`)
+- `GPTDIFF_MODEL`: Default model for generating diffs (default: `deepseek/deepseek-v4.1-flash-1017`, exported as `DEFAULT_MODEL`)
 - `GPTDIFF_FILTER_MODEL`: Cheap model for `--filter-relevant` (default: xiaomi/mimo-v2.6-flash). Flask recall 1.0 and ~0.8x overhead figures for that default are UNVERIFIED.
 
 For the smartapply feature, you can set separate variables:
