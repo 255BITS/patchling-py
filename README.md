@@ -17,7 +17,7 @@ print(updated["main.py"])
 
 Files in, files out. No filesystem access required, no agent harness. The hard part — applying an LLM-generated diff that `git apply` would reject — is what `smartapply` solves: per-file, AI-assisted patch resolution that survives fuzzy hunks, renames, new files, and deletions.
 
-🌐 Project home: [patchling.app](https://patchling.app) — try it live in your browser · 📚 Full documentation at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py)
+🌐 Project home: [patchling.app](https://patchling.app) — try it live in your browser · 📚 Full documentation at [gptdiff.255labs.xyz](https://gptdiff.255labs.xyz/)
 
 Prefer the browser? The same primitive ships on npm as **[patchling for JS](https://github.com/255BITS/patchling)**
 (`generateDiff` + `smartapply`, zero-dependency ESM) — try the **[live demos →](https://255bits.github.io/patchling-examples/)**.
@@ -93,7 +93,7 @@ See [examples/usage_example.py](examples/usage_example.py) for a runnable versio
 - `filter_relevant(files, task, model=..., concurrency=..., cache=...) -> FilterRelevantResult` — opt-in relevance filter for large directories. Each file is sent, with the task, to a cheap OpenAI-compatible model that answers yes/no. Only the `yes` files are returned for `generate_diff` and `smartapply`. The default model is `xiaomi/mimo-v2.6-flash` (Flask recall 1.0 and ~0.8x overhead figures are UNVERIFIED). The JS counterpart is `filterRelevant`.
 - `load_project_files(path, cwd) -> dict` / `save_files(files, base_dir)` — optional filesystem helpers for when you *do* want to read/write a real project (respects `.gitignore` and `.gptignore`).
 
-Full signatures, error handling, and edge cases: [API Reference](https://255bits.github.io/patchling-py/api).
+Full signatures, error handling, and edge cases: [API Reference](https://gptdiff.255labs.xyz/api/).
 
 **Pipeline example** — sequential transformations over an in-memory codebase:
 
@@ -168,7 +168,7 @@ patchling "Add type hints to all functions" --apply
 patchling "Add logging" src/api/ src/utils/helpers.py
 ```
 
-Useful flags: `--model`, `--temperature`, `--prepend <file>` (custom instructions), `--image <path>` (visual context), `--filter-relevant` (ask a cheap model which files to send; `--filter-model` picks that model), `--nobeep`. Full list: [CLI Reference](https://255bits.github.io/patchling-py/cli).
+Useful flags: `--model`, `--temperature`, `--prepend <file>` (custom instructions), `--image <path>` (visual context), `--filter-relevant` (ask a cheap model which files to send; `--filter-model` picks that model), `--nobeep`. Full list: [CLI Reference](https://gptdiff.255labs.xyz/cli/).
 
 Because changes arrive as diffs, the CLI is git-native: review with `git diff`, keep with `git add -p`, discard with `git checkout .`.
 
@@ -181,7 +181,7 @@ patchling-apply path/to/diff.patch
 patchling-apply --diff "<diff text>"
 ```
 
-Options: `--project-dir`, `--model`, `--max_tokens`, `--nobeep`. Details: [patchling-apply docs](https://255bits.github.io/patchling-py/patchling-apply).
+Options: `--project-dir`, `--model`, `--max_tokens`, `--nobeep`. Details: [patchling-apply docs](https://gptdiff.255labs.xyz/patchling-apply/).
 
 ### Agent loops
 
@@ -195,7 +195,7 @@ while true; do
 done
 ```
 
-One overnight test-coverage loop took a project from 18 to 127 test cases. Recipes and guardrails: [Automation Guide](https://255bits.github.io/patchling-py/examples/automation).
+One overnight test-coverage loop took a project from 18 to 127 test cases. Recipes and guardrails: [Automation Guide](https://gptdiff.255labs.xyz/examples/automation/).
 
 ---
 
@@ -208,7 +208,7 @@ pytest tests/
 
 ## Documentation
 
-Docs live at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py). To preview locally:
+Docs live at [gptdiff.255labs.xyz](https://gptdiff.255labs.xyz/). To preview locally:
 
 ```bash
 pip install .[docs]
