@@ -14,7 +14,7 @@ patchling "Replace raw SQL with SQLAlchemy ORM" \
 
 ```bash
 patchling "Add v2 API endpoints with backward compatibility" \
-    --model deepseek-reasoner \
+    --model deepseek/deepseek-v4.1-flash-1017 \
     --temperature 0.5 \
     --apply
 ```

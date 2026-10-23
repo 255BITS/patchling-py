@@ -134,7 +134,7 @@ Running agent loops is consuming more API credits than expected.
     ```
 2. Use a faster, cheaper model for iterative improvements:
     ```bash
-    export GPTDIFF_MODEL='gemini-2.0-flash'
+    export GPTDIFF_MODEL='gemini-2.5-flash-lite'
     ```
 3. Target specific directories to reduce context size:
     ```bash

@@ -120,14 +120,16 @@ This is the pattern [nanoodle.com](https://nanoodle.com) runs in the browser (vi
 
 | Model | Best for | Notes |
 |-------|----------|-------|
-| `gemini-3-pro-preview` | Generating diffs | **Recommended default** |
-| `gpt-4o` / `claude-sonnet-4-20250514` | Complex or context-sensitive changes | Slower, more careful |
-| `gpt5-mini` | Applying diffs (`smartapply`) | Fast and reliable — best `GPTDIFF_SMARTAPPLY_MODEL` |
-| `gemini-2.0-flash` | Simple text changes | Most cost-effective |
+| `deepseek/deepseek-v4.1-flash-1017` | Generating diffs | **Default** (`DEFAULT_MODEL`); $0.10 / $0.60 per 1M tokens |
+| `xiaomi/mimo-v2.6-pro` / `anthropic/claude-sonnet-4.6` | Complex or context-sensitive changes | $0.435 / $0.87 and $3 / $15 per 1M tokens |
+| `openai/gpt-5-mini` | Applying diffs (`smartapply`) | A cheap choice for the CLI's `GPTDIFF_SMARTAPPLY_MODEL` (or `model=` in the library); $0.25 / $2 per 1M tokens |
+| `gemini-2.5-flash-lite` | Simple text changes | $0.10 / $0.40 per 1M tokens |
+
+Ids and prices are from NanoGPT's public model list (`https://nano-gpt.com/api/v1/models?detailed=true`) as of 2026-10-21. Use `--model` to select a compatible text-generation model.
 
 ```bash
-export GPTDIFF_MODEL='gemini-3-pro-preview'
-export GPTDIFF_SMARTAPPLY_MODEL='gpt5-mini'
+export GPTDIFF_MODEL='deepseek/deepseek-v4.1-flash-1017'
+export GPTDIFF_SMARTAPPLY_MODEL='openai/gpt-5-mini'
 ```
 
 ### Environment variables

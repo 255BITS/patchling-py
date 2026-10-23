@@ -40,7 +40,7 @@ Each cycle, Patchling identified the next untested function, wrote appropriate t
 ```bash
 while true; do
   patchling "Find and fix OWASP Top 10 vulnerabilities" \
-    --model deepseek-reasoner \
+    --model deepseek/deepseek-v4.1-flash-1017 \
     --apply
   sleep 30
 done
@@ -112,7 +112,7 @@ done
 ```bash
 while true; do
   patchling "Find and fix intermittent test failures by adding retries/cleanup" \
-    --model deepseek-reasoner \
+    --model deepseek/deepseek-v4.1-flash-1017 \
     --apply
 done
 ```
@@ -135,7 +135,7 @@ done
 while :; do
   patchling "Find and fix OWASP Top 10 vulnerabilities" \
     --apply \
-    --model deepseek-reasoner
+    --model deepseek/deepseek-v4.1-flash-1017
 done
 ```
 

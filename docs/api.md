@@ -144,7 +144,7 @@ diff = '''diff --git a/core.py b/core.py
 try:
     smartapply(diff, {"core.py": "def old_name():\n    pass"}) 
 except APIError as e:  # Built-in error handling
-    updated = smartapply(diff, files, model='gemini-2.0-flash')  # Retry
+    updated = smartapply(diff, files, model='gemini-2.5-flash-lite')  # Retry
 ```
 
 ## Building blocks
@@ -177,7 +177,7 @@ from patchling import (
 from patchling import set_env, resolve_api_key, DEFAULT_MODEL
 
 set_env("GPTDIFF_LLM_API_KEY", "key_123")
-set_env("GPTDIFF_MODEL", "gemini-3-pro-preview")
+set_env("GPTDIFF_MODEL", "xiaomi/mimo-v2.6-pro")
 assert resolve_api_key() == "key_123"
 set_env("GPTDIFF_MODEL", None)  # fall back to the process environment, then DEFAULT_MODEL
 ```
@@ -327,9 +327,9 @@ except Exception as e:
    ```
    
 2. **Model Selection**:
-   - `gemini-3-pro-preview`: Recommended default for generating diffs
-   - `gpt5-mini`: Recommended for smartapply (fast and reliable)
-   - `gemini-2.0-flash`: Fastest for simple text modifications
+   - `deepseek/deepseek-v4.1-flash-1017`: the default (`DEFAULT_MODEL`) for generating diffs
+   - `openai/gpt-5-mini`: a cheap choice for smartapply (pass it as `model=`; the CLI reads `GPTDIFF_SMARTAPPLY_MODEL`)
+   - `gemini-2.5-flash-lite`: a cheap choice for simple text modifications
 
 ## Edge Case Handling
 

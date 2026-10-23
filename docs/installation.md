@@ -35,9 +35,9 @@ To use `patchling`, you need an API key from [nano-gpt.com/api](https://nano-gpt
 #### Linux/MacOS
 ```bash
 export GPTDIFF_LLM_API_KEY='your-api-key'
-# Recommended models
-export GPTDIFF_MODEL='gemini-3-pro-preview'  # For generating diffs
-export GPTDIFF_SMARTAPPLY_MODEL='gpt5-mini'  # For applying diffs
+# Optional: override the default models
+export GPTDIFF_MODEL='deepseek/deepseek-v4.1-flash-1017'  # For generating diffs (this is the default)
+export GPTDIFF_SMARTAPPLY_MODEL='openai/gpt-5-mini'  # For applying diffs
 ```
 
 #### Windows

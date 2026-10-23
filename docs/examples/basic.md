@@ -34,7 +34,7 @@ patchling "Rename UserController to AccountController" \
 
 ```bash
 patchling "Add Python type hints throughout codebase" \
-    --model deepseek-reasoner \
+    --model deepseek/deepseek-v4.1-flash-1017 \
     --temperature 0.3 \
     --apply
 ```

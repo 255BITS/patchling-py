@@ -63,10 +63,10 @@ patchling "Refactor legacy API" --temperature 0.3
 ### Model Selection
 `--model`
 **Choose LLM model (default: $GPTDIFF_MODEL or `deepseek/deepseek-v4.1-flash-1017`, which is `DEFAULT_MODEL`)**
-*Options:* `gemini-3-pro-preview` (recommended), `gpt-4o` (complex), `gemini-2.0-flash` (fast)
+*Options:* a compatible text-generation model, for example `xiaomi/mimo-v2.6-pro` or `anthropic/claude-sonnet-4.6` (complex changes) and `gemini-2.5-flash-lite` (simple, cheap)
 *Example:*
 ```bash
-patchling "Translate docs to French" --model gemini-2.0-flash
+patchling "Translate docs to French" --model gemini-2.5-flash-lite
 ```
 
 ### Scope Management
