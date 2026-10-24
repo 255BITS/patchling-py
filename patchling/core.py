@@ -30,6 +30,8 @@ import requests
 from ai_agent_toolbox import Toolbox, MarkdownParser, MarkdownPromptFormatter, XMLParser, XMLPromptFormatter
 from .applydiff import (
     apply_diff,
+    resolve_within,
+    UnsafePathError,
     parse_diff_per_file,
     apply_patch_to_content,
     apply_changes_only,
@@ -1091,7 +1093,13 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args, original_files=
     success_lock = Lock()
 
     def process_file(file_path, file_diff):
-        full_path = Path(project_dir) / file_path
+        try:
+            full_path = resolve_within(project_dir, file_path)
+        except UnsafePathError as exc:
+            print(f"\033[1;31m{exc}\033[0m")
+            with success_lock:
+                failed_files.append(file_path)
+            return
         if VERBOSE:
             print(f"Processing file: {file_path}")
         if '+++ /dev/null' in file_diff:
@@ -1204,7 +1212,7 @@ def save_files(files_dict: dict[str, str], target_directory: str | Path) -> None
     
     for file_path, content in files_dict.items():
         # Create the full path for the file.
-        full_path = target_directory / file_path
+        full_path = resolve_within(target_directory, file_path)
         
         # Ensure parent directories exist.
         full_path.parent.mkdir(parents=True, exist_ok=True)
