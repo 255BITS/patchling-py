@@ -46,7 +46,7 @@ from .relevance import (
 # Same value as PROMPT_VERSION, under the second name the JS package exports.
 FILTER_PROMPT_VERSION = PROMPT_VERSION
 
-__version__ = "0.9.3"
+__version__ = "0.9.4"
 
 __all__ = [
     "__version__",
