@@ -49,3 +49,24 @@ def test_only_stubs_and_cname_remain(tmp_path):
     assert files == ["404.html", "CNAME", "cli/index.html", "examples/basic/index.html", "index.html"]
     assert (site / "CNAME").read_text() == "gptdiff.255labs.xyz\n"
     assert "https://patchling.app/py/cli/" in (site / "cli/index.html").read_text()
+
+
+def test_embedded_json_escapes_lt(tmp_path):
+    assert mod.js_json("</script><!--") == '"\\u003c/script\\u003e\\u003c!--"'
+    site = tmp_path
+    for rel in ["index.html", "a</script><b/index.html", "x<!--y/index.html"]:
+        f = site / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    base = "https://patchling.app/py/?q=</script>"
+    mod.build(site, base)
+    for f in site.rglob("*.html"):
+        text = f.read_text()
+        for script in re.findall(r"<script>(.*?)</script>", text, re.S):
+            assert "<" not in script, f
+        assert text.count("</script>") == 1
+    known = re.search(r"var known = (\[.*?\]);", (site / "404.html").read_text()).group(1)
+    assert json.loads(known) == ["a</script><b/", "x<!--y/"]
+    stub = (site / "a</script><b/index.html").read_text()
+    m = re.search(r"location\.replace\((.*?) \+ location\.search", stub)
+    assert json.loads(m.group(1)) == base + "/a</script><b/"

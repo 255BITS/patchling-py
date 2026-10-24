@@ -74,9 +74,16 @@ def page_paths(site: Path) -> list[str]:
     return sorted(out)
 
 
+def js_json(value) -> str:
+    """JSON for embedding in an inline <script>: escape < (and >, &) so a value
+    can never close the script element or open a comment."""
+    return (json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("&", "\\u0026"))
+
+
 def stub(target: str) -> str:
     return STUB.format(target=html.escape(target, quote=True), target_text=html.escape(target),
-                       target_js=json.dumps(target))
+                       target_js=js_json(target))
 
 
 def build(site: Path, base: str) -> list[str]:
@@ -94,7 +101,7 @@ def build(site: Path, base: str) -> list[str]:
         dest.write_text(stub(base + rel))
     (site / "404.html").write_text(NOT_FOUND.format(
         base=html.escape(base, quote=True), base_text=html.escape(base),
-        base_js=json.dumps(base), known_js=json.dumps([p for p in paths if p]),
+        base_js=js_json(base), known_js=js_json([p for p in paths if p]),
     ))
     if cname is not None:
         (site / "CNAME").write_text(cname)
