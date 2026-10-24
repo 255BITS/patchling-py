@@ -49,16 +49,42 @@ jobs:
             echo "::notice::CF_PAGES_DEPLOY_HOOK_PATCHLING_APP is not set; skipping patchling.app deploy trigger."
             exit 0
           fi
-          # Never echo the URL. Keep the response body out of the log except
-          # the deployment id.
+          # Never echo the URL or the raw response body.
+          # HTTP 200 alone is not success: Cloudflare must answer
+          # {"success": true, "result": {"id": "<deployment id>"}}.
+          set +e
           status=$(curl -sS -o response.json -w '%{http_code}' \
             --retry 2 --retry-delay 10 --max-time 30 \
-            -X POST "${DEPLOY_HOOK_URL}")
+            -X POST "${DEPLOY_HOOK_URL}" 2>curl.err)
+          rc=$?
+          set -e
+          if [ "${rc}" != "0" ]; then
+            echo "::error::Deploy hook request failed (curl exit ${rc})."
+            exit 1
+          fi
           if [ "${status}" != "200" ]; then
             echo "::error::Deploy hook returned HTTP ${status}."
             exit 1
           fi
-          id=$(python3 -c 'import json; print(json.load(open("response.json"))["result"]["id"])' \
-            2>/dev/null || echo "?")
-          echo "Triggered patchling.app deployment ${id} for ${GITHUB_SHA}."
-          echo "patchling.app deploy triggered: \`${id}\` (from ${GITHUB_SHA::8})" >> "${GITHUB_STEP_SUMMARY}"
+          id=$(python3 - <<'PY'
+          import json, re, sys
+          try:
+              data = json.load(open("response.json"))
+          except Exception:
+              sys.exit("response is not JSON")
+          if not isinstance(data, dict) or data.get("success") is not True:
+              sys.exit("response does not have success: true")
+          result = data.get("result")
+          dep = result.get("id") if isinstance(result, dict) else None
+          if not isinstance(dep, str) or not re.fullmatch(r"[A-Za-z0-9-]{8,64}", dep):
+              sys.exit("response has no deployment id")
+          print(dep)
+          PY
+          ) || { echo "::error::Deploy hook returned HTTP 200 but not a valid Cloudflare reply; treating as failure."; exit 1; }
+          echo "Queued patchling.app deployment ${id} for ${GITHUB_SHA}."
+          echo "Note: the deploy hook only queues a Pages build; this is not a finished deploy. Check the deployment in Cloudflare Pages."
+          {
+            echo "patchling.app deploy queued: \`${id}\` (from ${GITHUB_SHA::8})"
+            echo ""
+            echo "The hook only queues a build; it is not a finished deploy."
+          } >> "${GITHUB_STEP_SUMMARY}"
