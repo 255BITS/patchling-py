@@ -1,0 +1,90 @@
+name: Trigger patchling.app deploy
+
+# patchling.app is the Cloudflare Pages project "patchling", built from
+# 255BITS/patchling main. Pages only rebuilds on pushes to that repo, so this
+# workflow asks it to redeploy when this repo's docs or package change on main.
+#
+# One-time setup (repo admin):
+#   1. Cloudflare dashboard > Workers & Pages > patchling > Settings > Builds >
+#      Deploy hooks > Add deploy hook. Name: patchling-py, branch: main.
+#   2. GitHub > 255BITS/patchling-py > Settings > Secrets and variables >
+#      Actions > New repository secret. Name: CF_PAGES_DEPLOY_HOOK_PATCHLING_APP,
+#      value: the hook URL from step 1.
+# Until the secret exists this workflow skips with a notice instead of failing.
+# The hook URL is a credential: anyone holding it can trigger builds.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "overrides/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "patchling/**"
+      - "pyproject.toml"
+      - "setup.py"
+      - ".github/workflows/patchling-app-deploy.yml"
+  workflow_dispatch:
+
+# A newer push supersedes a queued trigger; each hook call deploys main's tip.
+concurrency:
+  group: patchling-app-deploy
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call Cloudflare Pages deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.CF_PAGES_DEPLOY_HOOK_PATCHLING_APP }}
+        run: |
+          if [ -z "${DEPLOY_HOOK_URL}" ]; then
+            echo "::notice::CF_PAGES_DEPLOY_HOOK_PATCHLING_APP is not set; skipping patchling.app deploy trigger."
+            exit 0
+          fi
+          # Never echo the URL or the raw response body.
+          # HTTP 200 alone is not success: Cloudflare must answer
+          # {"success": true, "result": {"id": "<deployment id>"}}.
+          set +e
+          status=$(curl -sS -o response.json -w '%{http_code}' \
+            --retry 2 --retry-delay 10 --max-time 30 \
+            -X POST "${DEPLOY_HOOK_URL}" 2>curl.err)
+          rc=$?
+          set -e
+          if [ "${rc}" != "0" ]; then
+            echo "::error::Deploy hook request failed (curl exit ${rc})."
+            exit 1
+          fi
+          if [ "${status}" != "200" ]; then
+            echo "::error::Deploy hook returned HTTP ${status}."
+            exit 1
+          fi
+          id=$(python3 - <<'PY'
+          import json, re, sys
+          try:
+              data = json.load(open("response.json"))
+          except Exception:
+              sys.exit("response is not JSON")
+          if not isinstance(data, dict) or data.get("success") is not True:
+              sys.exit("response does not have success: true")
+          result = data.get("result")
+          dep = result.get("id") if isinstance(result, dict) else None
+          if not isinstance(dep, str) or not re.fullmatch(r"[A-Za-z0-9-]{8,64}", dep):
+              sys.exit("response has no deployment id")
+          print(dep)
+          PY
+          ) || { echo "::error::Deploy hook returned HTTP 200 but not a valid Cloudflare reply; treating as failure."; exit 1; }
+          echo "Queued patchling.app deployment ${id} for ${GITHUB_SHA}."
+          echo "Note: the deploy hook only queues a Pages build; this is not a finished deploy. Check the deployment in Cloudflare Pages."
+          {
+            echo "patchling.app deploy queued: \`${id}\` (from ${GITHUB_SHA::8})"
+            echo ""
+            echo "The hook only queues a build; it is not a finished deploy."
+          } >> "${GITHUB_STEP_SUMMARY}"
