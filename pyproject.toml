@@ -39,7 +39,7 @@ docs = ["mkdocs", "mkdocs-material"]
 
 [project.urls]
 Homepage = "https://github.com/255BITS/patchling-py"
-Documentation = "https://255bits.github.io/patchling-py"
+Documentation = "https://gptdiff.255labs.xyz/"
 Source = "https://github.com/255BITS/patchling-py"
 "Browser/Node runtime (npm)" = "https://www.npmjs.com/package/patchling"
 "Built with patchling (nanoodle)" = "https://nanoodle.com"
