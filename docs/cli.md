@@ -82,6 +82,13 @@ patchling "Update config system" config/ utils/config_loader.py
 `--nowarn`: Disable the warning and confirmation prompt for large token usage
 `--verbose`: Enable verbose output for detailed information during execution
 
+With `--apply`, a failed file application or an empty/invalid generated diff
+produces exit status `1`; successful application produces `0`. Files are
+processed independently, so successful changes may remain after another file
+fails. The summary lists the failed paths and reasons. Inspect those changes
+before retrying or allowing an automation loop to continue. See
+[apply-command recovery](patchling-apply.md#exit-status-and-recovery).
+
 ### Relevance filter
 
 For a large tree, `--filter-relevant` asks a cheap model whether each file matters to the prompt and sends only the `yes` files on to diff generation. The same base URL and API key as the rest of the tool are used (`GPTDIFF_LLM_BASE_URL`, `GPTDIFF_LLM_API_KEY`). The model defaults to `GPTDIFF_FILTER_MODEL` or `xiaomi/mimo-v2.6-flash`. A pallets/flask pass reported recall 1.0 and about 0.8x the token overhead of the next model tried. Those figures are **UNVERIFIED**. Each check uses prompt version 3, 1024 output tokens, and `reasoning_effort=low`.

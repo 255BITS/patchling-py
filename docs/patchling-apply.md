@@ -29,7 +29,7 @@ patchling-apply path/to/diff.patch
 ## Options
 
 - **--project-dir**: Specify the target directory for applying the diff (default: current directory)
-- **--model**: (Optional) Specify the LLM model for advanced conflict resolution
+- **--model**: (Optional) Specify the model used to apply the diff. This overrides `GPTDIFF_SMARTAPPLY_MODEL`; when neither is set, the default is `openai/gpt-4.1-mini`.
 - **--max_tokens**: (Optional) Maximum tokens to use for LLM responses
 - **--nobeep**: Disable the completion beep notification
 - **--dumb**: Attempt to apply the diff using standard patch logic (like git apply) before falling back to smart apply
@@ -38,13 +38,28 @@ patchling-apply path/to/diff.patch
 
 By default, patchling-apply uses an AI-powered smart apply mechanism to apply the diff directly. If the `--dumb` flag is specified, it first attempts to apply the diff using standard patch logic (similar to git apply). If that fails, it falls back to the smart apply mechanism with AI-powered conflict resolution.
 
+## Exit status and recovery
+
+The command exits with status `0` when every file succeeds. Deleting a file
+that is already absent is a successful no-op. An empty or invalid diff, an
+unsafe path, a model refusal or empty response, and a filesystem failure
+produce status `1`.
+
+Files are applied independently. If one file fails, successful writes or
+deletions to other files may remain; they are not rolled back. The failure
+summary lists each failed file and its reason. Inspect the project before
+retrying, and make automation check the exit status before continuing.
+The same failure status applies to `patchling "…" --apply` and the legacy
+`gptdiff` / `gptpatch` command aliases. The in-memory library `smartapply`
+retains its existing return and exception behavior.
+
 ## Agent Loop Integration
 
 `patchling-apply` is what makes Patchling agent loops production-ready. When running continuous improvement loops:
 
 ```bash
 while true; do
-  patchling "improve code quality" --apply
+  patchling "improve code quality" --apply || exit 1
 done
 ```
 
@@ -54,7 +69,8 @@ The `--apply` flag uses patchling-apply internally. Each iteration may encounter
 - **Merge conflicts** - Overlapping changes from previous iterations
 - **Partial matches** - Context lines that shifted
 
-patchling-apply's AI-powered smart apply resolves these automatically, keeping your loop running without manual intervention. This is why Patchling can run overnight while you sleep—patchling-apply handles the edge cases.
+Successful iterations can continue automatically. A nonzero exit status requires
+the loop to stop or explicitly handle the reported failure before continuing.
 
 For production-ready loop patterns and real metrics (18→127 tests, 8 SQL injections→0), see the [Agent Loops Guide](examples/automation.md).
 

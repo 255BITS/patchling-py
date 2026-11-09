@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 import subprocess
@@ -1069,9 +1070,28 @@ def build_environment_from_filelist(file_list, cwd):
             continue
     return build_environment(files_dict)
 
+@dataclass
+class SmartApplyResult:
+    """Outcome of the filesystem CLI applier; successful writes are not rolled back."""
+
+    succeeded: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    failures: dict[str, str] = field(default_factory=dict)
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and not self.failures
+
+
 def smart_apply_patch(project_dir, diff_text, user_prompt, args, original_files=None):
     """
-    Attempt to apply a diff via smartapply: process each file concurrently using the LLM.
+    Apply files concurrently and return a structured filesystem outcome.
+
+    A per-file refusal, unsafe path, or filesystem error fails the aggregate
+    result. Other files may already have been written: this CLI helper is not
+    a project-wide transaction. The in-memory public ``smartapply`` API keeps
+    its existing return and exception contract.
     """
     from pathlib import Path
     start_time = time.time()
@@ -1083,87 +1103,78 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args, original_files=
     reset = "\033[0m"
 
     if len(parsed_diffs) == 0:
-        print(colorize_warning_warning("There were no entries in this diff. The LLM may have returned something invalid."))
+        message = "There were no entries in this diff. The LLM may have returned something invalid."
+        print(colorize_warning_warning(message))
         if args.beep:
             print("\a")
-        return
+        return SmartApplyResult(error=message)
     threads = []
     success_files = []
-    failed_files = []
+    skipped_files = []
+    failures = {}
     success_lock = Lock()
 
     def process_file(file_path, file_diff):
         try:
             full_path = resolve_within(project_dir, file_path)
-        except UnsafePathError as exc:
-            print(f"\033[1;31m{exc}\033[0m")
-            with success_lock:
-                failed_files.append(file_path)
-            return
-        if VERBOSE:
-            print(f"Processing file: {file_path}")
-        if '+++ /dev/null' in file_diff:
-            if full_path.exists():
-                full_path.unlink()
-                print(f"\033[1;32mDeleted file {file_path}.\033[0m")
-            else:
-                print(colorize_warning_warning(f"File {file_path} not found - skipping deletion"))
-            return
+            if VERBOSE:
+                print(f"Processing file: {file_path}")
+            if '+++ /dev/null' in file_diff:
+                if full_path.exists():
+                    full_path.unlink()
+                    print(f"\033[1;32mDeleted file {file_path}.\033[0m")
+                    with success_lock:
+                        success_files.append(file_path)
+                else:
+                    print(colorize_warning_warning(f"File {file_path} not found - skipping deletion"))
+                    with success_lock:
+                        skipped_files.append(file_path)
+                return
 
-        original_content = ""
-        # Prefer the full pre-filter map. A file the relevance filter dropped
-        # from the prompt is still applied against its original contents.
-        if original_files is not None and file_path in original_files:
-            mapped = original_files[file_path]
-            if isinstance(mapped, str):
-                original_content = mapped
-            elif isinstance(mapped, (bytes, bytearray)):
-                original_content = bytes(mapped).decode("utf-8", errors="replace")
-            else:
-                original_content = str(mapped)
-        elif full_path.exists():
-            try:
+            original_content = ""
+            # The relevance filter narrows the prompt, not the original map.
+            if original_files is not None and file_path in original_files:
+                mapped = original_files[file_path]
+                if isinstance(mapped, str):
+                    original_content = mapped
+                elif isinstance(mapped, (bytes, bytearray)):
+                    original_content = bytes(mapped).decode("utf-8", errors="replace")
+                else:
+                    original_content = str(mapped)
+            elif full_path.exists():
+                # A failed read must not turn an existing file into a new file.
                 original_content = full_path.read_text()
-            except (UnicodeDecodeError, IOError) as e:
-                print(f"Cannot read {file_path} due to {str(e)}, treating as new file")
-        else:
-            print(f"File {file_path} does not exist, treating as new file")
-
-        # Use SMARTAPPLY-specific environment variables if set, otherwise fallback.
-        # Determine model for smartapply: CLI flag > environment > recommended default
-        if hasattr(args, "applymodel") and args.applymodel:
-            model = args.applymodel
-        else:
-            smart_apply_model = (get_env("GPTDIFF_SMARTAPPLY_MODEL") or "").strip()
-            if smart_apply_model:
-                model = smart_apply_model
             else:
-                model = 'openai/gpt-4.1-mini'
+                print(f"File {file_path} does not exist, treating as new file")
 
-        smart_api_key = get_env("GPTDIFF_SMARTAPPLY_API_KEY")
-        if smart_api_key and smart_api_key.strip():
-            api_key = smart_api_key
-        else:
-            api_key = get_env("GPTDIFF_LLM_API_KEY")
+            # The main CLI's --model only selects diff generation. The apply
+            # command maps its --model flag to this same applymodel attribute.
+            explicit_model = (getattr(args, "applymodel", None) or "").strip()
+            if explicit_model:
+                model = explicit_model
+            else:
+                model = (get_env("GPTDIFF_SMARTAPPLY_MODEL") or "").strip() or 'openai/gpt-4.1-mini'
 
-        smart_base_url = get_env("GPTDIFF_SMARTAPPLY_BASE_URL")
-        if smart_base_url and smart_base_url.strip():
-            base_url = smart_base_url
-        else:
-            base_url = resolve_base_url(None)
+            smart_api_key = get_env("GPTDIFF_SMARTAPPLY_API_KEY")
+            if smart_api_key and smart_api_key.strip():
+                api_key = smart_api_key
+            else:
+                api_key = get_env("GPTDIFF_LLM_API_KEY")
 
-        print(f"Running smartapply in parallel for '{file_path}' using model '{green}{model}{reset}' from '{blue}{domain_for_url(base_url)}{reset}'...")
-        try:
+            smart_base_url = get_env("GPTDIFF_SMARTAPPLY_BASE_URL")
+            if smart_base_url and smart_base_url.strip():
+                base_url = smart_base_url
+            else:
+                base_url = resolve_base_url(None)
+
+            print(f"Running smartapply in parallel for '{file_path}' using model '{green}{model}{reset}' from '{blue}{domain_for_url(base_url)}{reset}'...")
             updated_content = call_llm_for_apply_with_think_tool_available(
                 file_path, original_content, file_diff, model,
                 api_key=api_key, base_url=base_url,
                 extra_prompt=f"This changeset is from the following instructions:\n{user_prompt}",
                 max_tokens=args.max_tokens)
             if updated_content.strip() == "":
-                print("Cowardly refusing to write empty file to", file_path, "merge failed")
-                with success_lock:
-                    failed_files.append(file_path)
-                return
+                raise SmartApplyError("refusing to write an empty model response")
             full_path.parent.mkdir(parents=True, exist_ok=True)
             if updated_content and not updated_content.endswith("\n"):
                 updated_content += "\n"
@@ -1174,7 +1185,7 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args, original_files=
         except Exception as e:
             print(f"\033[1;31mFailed to process {file_path}: {str(e)}\033[0m")
             with success_lock:
-                failed_files.append(file_path)
+                failures[file_path] = str(e)
 
     for file_path, file_diff in parsed_diffs:
         thread = threading.Thread(target=process_file, args=(file_path, file_diff))
@@ -1185,16 +1196,20 @@ def smart_apply_patch(project_dir, diff_text, user_prompt, args, original_files=
     elapsed = time.time() - start_time
     minutes, seconds = divmod(int(elapsed), 60)
     time_str = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
-    print(f"Smartapply successfully applied changes in {time_str}. Check the updated files to confirm.")
-    if failed_files:
-        print(f"\033[1;31mSmart apply completed in {time_str} with failures for {len(failed_files)} files:\033[0m")
-        for file in failed_files:
-            print(f"  - {file}")
-        print("Please check the errors above for details.")
+    if failures:
+        print(f"\033[1;31mSmart apply completed in {time_str} with failures for {len(failures)} files:\033[0m")
+        for file, message in sorted(failures.items()):
+            print(f"  - {file}: {message}")
+        print("Successful file changes may remain; inspect the project before retrying.")
     else:
-        print(f"\033[1;32mSmart apply completed successfully in {time_str} for all {len(success_files)} files.\033[0m")
+        print(f"\033[1;32mSmart apply completed successfully in {time_str}: {len(success_files)} files changed, {len(skipped_files)} already absent.\033[0m")
     if args.beep:
         print("\a")
+    return SmartApplyResult(
+        succeeded=tuple(sorted(success_files)),
+        skipped=tuple(sorted(skipped_files)),
+        failures=dict(sorted(failures.items())),
+    )
 
 def save_files(files_dict: dict[str, str], target_directory: str | Path) -> None:
     """
@@ -1431,13 +1446,14 @@ def main():
                                                                                                 images=encoded_images
                                                                                                 )
 
+    exit_status = 0
     if(diff_text.strip() == ""):
         print(f"\033[1;33mWarning: No valid diff data was generated. This could be due to an unclear prompt or an invalid LLM response.\033[0m")
         print("Suggested action: Refine your prompt or check the full response below for clues.")
         print("Full LLM response:\n---\n" + full_text + "\n---")
         if args.beep:
             print("\a")
-        return
+        return 1 if args.apply else 0
 
     elif args.apply:
         print("\nAttempting apply with the following diff:")
@@ -1447,9 +1463,11 @@ def main():
             absolute_to_relative(file): content
             for file, content in original_project_files
         }
-        smart_apply_patch(
+        outcome = smart_apply_patch(
             project_dir, diff_text, user_prompt, args, original_files=original_map
         )
+        if not outcome.ok:
+            exit_status = 1
         #apply_result = apply_diff(project_dir, diff_text)
         #if apply_result:
         #    print(f"\033[1;32mPatch applied successfully with basic apply.\033[0m")
@@ -1469,6 +1487,7 @@ def main():
         print(f"- Model used: {green}{args.model}{reset}")
     else:
         print(f"API Usage: {total_tokens} tokens, Model used: {green}{args.model}{reset}")
+    return exit_status
 
 def swallow_reasoning(full_response: str) -> tuple[str, str]:
     """
@@ -1559,4 +1578,4 @@ def strip_bad_output(updated: str, original: str) -> str:
     return inner
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

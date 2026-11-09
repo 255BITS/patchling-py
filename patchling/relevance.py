@@ -26,11 +26,15 @@ excluded before their bytes are decoded.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import inspect
 import json
 import logging
 import os
 import re
+import secrets
+import socket
+import sys
 import tempfile
 import threading
 import time
@@ -203,6 +207,157 @@ class FilterRelevantResult:
         }
 
 
+_CACHE_LOCK_WAIT_SECONDS = 2.0
+_CACHE_LOCK_POLL_SECONDS = 0.01
+_CACHE_CLAIM_NAME = re.compile(r"[a-f0-9]{32}\.json\Z")
+_CACHE_TEMP_NAME = re.compile(r"\.[a-f0-9]{32}\.tmp\Z")
+_CACHE_MAX_TICKET = (1 << 53) - 1  # The shared JS safe-integer range.
+
+
+def _cache_pid_scope():
+    if sys.platform == "linux":
+        try:
+            return "linux:" + os.readlink("/proc/self/ns/pid")
+        except OSError:
+            return None  # Unknown PID namespace: never reap its claims.
+    return sys.platform
+
+
+def _valid_cache_claim(value, name):
+    return (
+        isinstance(value, dict)
+        and type(value.get("version")) is int and value["version"] == 1
+        and isinstance(value.get("hostname"), str) and bool(value["hostname"])
+        and (value.get("pid_scope") is None or (
+            isinstance(value.get("pid_scope"), str) and bool(value["pid_scope"])))
+        and "pid_scope" in value
+        and type(value.get("pid")) is int and 0 < value["pid"] <= _CACHE_MAX_TICKET
+        and type(value.get("ticket")) is int and 0 <= value["ticket"] <= _CACHE_MAX_TICKET
+        and isinstance(value.get("token"), str)
+        and _CACHE_CLAIM_NAME.fullmatch(name) is not None
+        and name == value["token"] + ".json"
+    )
+
+
+def _dead_cache_owner(claim, owner):
+    # CPython Windows implements most signals with TerminateProcess; signal 0
+    # is not a safe existence probe there. Unknown platforms remain manual-only.
+    if os.name != "posix":
+        return False
+    if (claim["hostname"] != owner["hostname"] or not owner["pid_scope"]
+            or claim["pid_scope"] != owner["pid_scope"]):
+        return False
+    try:
+        os.kill(claim["pid"], 0)
+    except ProcessLookupError:
+        return True
+    except (PermissionError, OSError, OverflowError):
+        return False  # Unknown/EPERM is not evidence of death.
+    return False
+
+
+def _cache_claims(directory, owner):
+    claims, unknown = [], False
+    for name in os.listdir(directory):
+        if _CACHE_TEMP_NAME.fullmatch(name):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                claim = json.load(handle)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, UnicodeError):
+            unknown = True
+            continue
+        if not _valid_cache_claim(claim, name):
+            unknown = True
+            continue
+        if claim["token"] != owner["token"] and _dead_cache_owner(claim, owner):
+            # The unique token is never reused: concurrent reapers cannot
+            # remove a new owner's replacement lock (the stale-lock ABA race).
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            continue
+        claims.append(claim)
+    return claims, unknown
+
+
+@contextmanager
+def _cache_write_lock(target):
+    """The shared JS/Python local-filesystem bakery-lock protocol."""
+    directory = target + ".lock"
+    os.makedirs(directory, exist_ok=True)
+    owner = {"version": 1, "hostname": socket.gethostname(), "pid_scope": _cache_pid_scope(),
+             "pid": os.getpid(), "token": secrets.token_hex(16), "ticket": 0}
+    claim_path = os.path.join(directory, owner["token"] + ".json")
+    temporary = os.path.join(directory, "." + owner["token"] + ".tmp")
+
+    def publish():
+        try:
+            with open(temporary, "x", encoding="utf-8") as handle:
+                json.dump(owner, handle)
+            os.replace(temporary, claim_path)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+    deadline = time.monotonic() + _CACHE_LOCK_WAIT_SECONDS
+
+    def wait():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Timed out waiting for relevance cache lock: " + target)
+        time.sleep(_CACHE_LOCK_POLL_SECONDS)
+
+    try:
+        publish()  # ticket 0 announces that this contender is choosing.
+        while True:
+            claims, unknown = _cache_claims(directory, owner)
+            if unknown:
+                wait()
+                continue
+            greatest = max((claim["ticket"] for claim in claims), default=0)
+            if greatest >= _CACHE_MAX_TICKET:
+                raise OverflowError("Relevance cache lock ticket exhausted")
+            owner["ticket"] = greatest + 1
+            publish()
+            break
+        while True:
+            claims, unknown = _cache_claims(directory, owner)
+            if not any(claim["token"] == owner["token"] and claim["ticket"] == owner["ticket"]
+                       for claim in claims):
+                raise RuntimeError("Relevance cache lock claim was removed")
+            earlier = any(claim["token"] != owner["token"] and (
+                claim["ticket"] == 0
+                or (claim["ticket"], claim["token"]) < (owner["ticket"], owner["token"]))
+                for claim in claims)
+            if not unknown and not earlier:
+                yield
+                break
+            wait()
+    finally:
+        try:
+            os.unlink(claim_path)
+        except FileNotFoundError:
+            pass
+
+
+def _cache_entries_on_disk(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (ValueError, UnicodeError):
+        return {}
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    return dict(entries) if isinstance(entries, dict) else {}
+
+
 class RelevanceCache:
     """In-memory relevance cache with an optional on-disk JSON file.
 
@@ -220,6 +375,7 @@ class RelevanceCache:
     def __init__(self, path: Optional[os.PathLike | str] = None):
         self.path = os.fspath(path) if path else None
         self._entries: dict = {}
+        self._dirty: dict = {}
         self._lock = threading.Lock()
         if self.path and os.path.exists(self.path):
             self._load()
@@ -264,31 +420,44 @@ class RelevanceCache:
     def put(self, key: str, record: dict) -> None:
         with self._lock:
             self._entries[key] = dict(record)
+            self._dirty[key] = self._entries[key]
 
     def flush(self) -> None:
+        """Merge dirty entries into the latest version-1 file; failures stay retryable."""
         if not self.path:
             return
         with self._lock:
-            payload = {"version": 1, "entries": self._entries}
-            directory = os.path.dirname(os.path.abspath(self.path)) or "."
-            os.makedirs(directory, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".relevance-cache-", suffix=".tmp")
+            if not self._dirty:
+                return
+            target = os.path.abspath(self.path)
+            directory = os.path.dirname(target) or "."
+            tmp = None
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(payload, handle)
-                os.replace(tmp, self.path)
+                os.makedirs(directory, exist_ok=True)
+                with _cache_write_lock(target):
+                    entries = _cache_entries_on_disk(target)
+                    entries.update(self._dirty)
+                    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".relevance-cache-", suffix=".tmp")
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        json.dump({"version": 1, "entries": entries}, handle)
+                    os.replace(tmp, target)
+                    tmp = None
+                    self._entries = entries
+                    self._dirty.clear()
             except Exception as exc:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
                 _log.warning("relevance cache write failed for %s: %s", self.path, exc)
+            finally:
+                if tmp is not None:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
     def _load(self) -> None:
         try:
             with open(self.path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, UnicodeError) as exc:
             _log.warning("relevance cache read failed for %s: %s", self.path, exc)
             return
         entries = payload.get("entries") if isinstance(payload, dict) else None
