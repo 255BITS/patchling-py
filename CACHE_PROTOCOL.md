@@ -58,6 +58,13 @@ Temporary files left by a killed process do not block later claims.
 
 ## Compatibility limits
 
+Coordination requires every writer to use the new protocol. Published npm
+`patchling 0.3.1` and Python `patchling <=0.9.4` ignore these claims and can
+overwrite newer entries. While any older writer remains active, give upgraded
+Python a separate file, such as `.patchling-cache-python.json`, or disable disk
+caching. Stop all processes using the old file before copying it to the new path.
+Merging the JS fix does not upgrade installed npm clients.
+
 This coordination protocol requires all concurrent writers to be upgraded.
 Older clients can still read the version-1 file, but an older writer ignores the
 claims and can still overwrite newer entries. Network/distributed filesystems,
