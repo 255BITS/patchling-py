@@ -138,7 +138,7 @@ export GPTDIFF_SMARTAPPLY_MODEL='openai/gpt-5-mini'
 |----------|---------|---------|
 | `GPTDIFF_LLM_API_KEY` | API key (required) | — |
 | `GPTDIFF_MODEL` | Model for diff generation | `deepseek/deepseek-v4.1-flash-1017` (`DEFAULT_MODEL`) |
-| `GPTDIFF_SMARTAPPLY_MODEL` | CLI only: model for `--apply` (`--applymodel` overrides it) | `openai/gpt-4.1-mini`. Never falls back to `GPTDIFF_MODEL` |
+| `GPTDIFF_SMARTAPPLY_MODEL` | CLI apply model: `patchling --applymodel` or `patchling-apply --model` overrides it | `openai/gpt-4.1-mini`. Never falls back to `GPTDIFF_MODEL` |
 | `GPTDIFF_LLM_BASE_URL` | OpenAI-compatible endpoint | `https://nano-gpt.com/api/v1/` |
 | `GPTDIFF_FILTER_MODEL` | Cheap model for `filter_relevant` | `xiaomi/mimo-v2.6-flash` (Flask recall 1.0 / ~0.8x overhead: UNVERIFIED) |
 
@@ -183,6 +183,11 @@ patchling-apply --diff "<diff text>"
 
 Options: `--project-dir`, `--model`, `--max_tokens`, `--nobeep`. Details: [patchling-apply docs](https://255bits.github.io/patchling-py/patchling-apply).
 
+Both CLI apply commands exit `1` on a failed file, unsafe path, or empty/invalid
+diff, and `0` when all files succeed. Successful per-file changes may remain
+after a partial failure; inspect the reported paths before retrying. The
+in-memory library `smartapply` API is unchanged.
+
 ### Agent loops
 
 Because each invocation is bounded (one goal → one diff), the CLI composes into loops:
@@ -198,6 +203,11 @@ done
 One overnight test-coverage loop took a project from 18 to 127 test cases. Recipes and guardrails: [Automation Guide](https://255bits.github.io/patchling-py/examples/automation).
 
 ---
+
+Disk relevance caches retain their v1 JSON format. Concurrent writers coordinate
+through a sidecar lock directory; upgrade all writers sharing a cache together.
+See [cache coordination and recovery](CACHE_PROTOCOL.md) for filesystem and failure
+semantics.
 
 ## Testing
 

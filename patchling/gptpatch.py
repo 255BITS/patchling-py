@@ -42,6 +42,7 @@ def parse_arguments():
     parser.add_argument('--nobeep', action='store_false', dest='beep', default=True, help='Disable completion notification beep')
     parser.add_argument(
         "--model",
+        dest="applymodel",
         type=str,
         default=None,
         help="Model to use for applying the diff"
@@ -60,13 +61,13 @@ def main():
     args = parse_arguments()
     import patchling.core as gd
     gd.VERBOSE = args.verbose
-    if args.diff:
+    if args.diff is not None:
         diff_text = args.diff
     else:
         diff_path = Path(args.diff_file)
         if not diff_path.exists():
             print(f"Error: Diff file '{args.diff_file}' does not exist.")
-            sys.exit(1)
+            return 1
         diff_text = diff_path.read_text(encoding="utf8")
 
     project_dir = args.project_dir
@@ -80,11 +81,13 @@ def main():
         success = apply_diff(project_dir, diff_text)
         if success:
             print("\033[1;32m✅ Diff applied successfully.\033[0m")
+            return 0
         else:
             print("\033[1;31m❌ Failed to apply diff using git apply. Attempting smart apply.\033[0m")
-            smart_apply_patch(project_dir, diff_text, "", args)
+            outcome = smart_apply_patch(project_dir, diff_text, "", args)
     else:
-        smart_apply_patch(project_dir, diff_text, "", args)
+        outcome = smart_apply_patch(project_dir, diff_text, "", args)
+    return 0 if outcome.ok else 1
         
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
