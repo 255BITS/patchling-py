@@ -194,7 +194,7 @@ Because each invocation is bounded (one goal → one diff), the CLI composes int
 
 ```bash
 while true; do
-  patchling "Add missing test cases for edge conditions" --apply
+  patchling "Add missing test cases for edge conditions" --apply || exit 1
   git add -A && git commit -m "Auto-improvement $(date +%H:%M)" 2>/dev/null
   sleep 30
 done
@@ -206,8 +206,15 @@ One overnight test-coverage loop took a project from 18 to 127 test cases. Recip
 
 Disk relevance caches retain their v1 JSON format. Concurrent writers coordinate
 through a sidecar lock directory; upgrade all writers sharing a cache together.
-See [cache coordination and recovery](CACHE_PROTOCOL.md) for filesystem and failure
+See [cache coordination and recovery](https://github.com/255BITS/patchling-py/blob/main/CACHE_PROTOCOL.md) for filesystem and failure
 semantics.
+
+Coordination requires every writer to use the new protocol. Published npm
+`patchling 0.3.1` and Python `patchling <=0.9.4` ignore these claims and can
+overwrite newer entries. While any older writer remains active, give upgraded
+Python a separate file, such as `.patchling-cache-python.json`, or disable disk
+caching. Stop all processes using the old file before copying it to the new path.
+Merging the JS fix does not upgrade installed npm clients.
 
 ## Testing
 
