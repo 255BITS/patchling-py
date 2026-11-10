@@ -28,9 +28,10 @@ import openai
 from openai import OpenAI
 import tiktoken
 import requests
-from ai_agent_toolbox import Toolbox, MarkdownParser, MarkdownPromptFormatter, XMLParser, XMLPromptFormatter
+from ai_agent_toolbox import Toolbox, XMLParser
 from .applydiff import (
     apply_diff,
+    extract_diff_blocks,
     resolve_within,
     UnsafePathError,
     parse_diff_per_file,
@@ -474,10 +475,6 @@ def call_llm_for_diff(
     reset = "\033[0m"
     start_time = time.time()
 
-    parser = MarkdownParser()
-    formatter = MarkdownPromptFormatter()
-    toolbox = create_diff_toolbox()
-    #tool_prompt = formatter.usage_prompt(toolbox)
     tool_prompt="""Save the calculated diff as used in 'git apply'. Should include the file and line number. For example:
 ```diff
 a/file.py b/file.py
@@ -570,10 +567,9 @@ You must include the '--- file' and/or '+++ file' part of the diff. File modific
     if reasoning and len(reasoning) > 0:
         print("Swallowed reasoning", reasoning)
 
-    events = parser.parse(full_response)
-    for event in events:
-        toolbox.use(event)
-    diff_response = diff_context.get()
+    # Toolbox 1.x no longer exports MarkdownParser. Use the same fence
+    # extractor as our appliers, preserving block order and newline handling.
+    diff_response = extract_diff_blocks(full_response)
 
     return full_response, "\n".join(diff_response), prompt_tokens, completion_tokens, total_tokens
 
@@ -936,7 +932,6 @@ def colorize_warning_warning(message):
 
 def call_llm_for_apply_with_think_tool_available(file_path, original_content, file_diff, model, api_key=None, base_url=None, extra_prompt=None, max_tokens=None):
     parser = XMLParser("think")
-    formatter = XMLPromptFormatter(tag="think")
     toolbox = create_think_toolbox()
     if max_tokens is None:
         max_tokens = sized_max_tokens(original_content, file_diff)
