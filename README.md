@@ -223,6 +223,17 @@ pip install -e .[test]
 pytest tests/
 ```
 
+The compatibility tests use the installed `ai-agent-toolbox` package. Diff
+fences use Patchling's shared extractor; XML parsing and tool dispatch use
+real Toolbox classes. Only LLM transport and token counting are mocked.
+To reproduce a pinned dependency check (also tested with 0.2.0 and 1.0.0):
+
+```bash
+python -m pip install -e '.[test]' 'ai-agent-toolbox==1.0.3'
+python -m pip check
+TOOLBOX_VERSION=1.0.3 pytest tests/
+```
+
 ## Documentation
 
 Docs live at [255bits.github.io/patchling-py](https://255bits.github.io/patchling-py). To preview locally:
