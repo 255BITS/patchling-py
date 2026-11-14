@@ -48,6 +48,15 @@ jobs:
       - name: Ensure CNAME is set
         run: echo "gptdiff.255labs.xyz" > public/CNAME
 
+      # gptdiff.255labs.xyz -> patchling.app/py/ (same page, query and #anchor;
+      # unknown paths go to /py/). Off until the repo variable
+      # GPTDIFF_REDIRECT_TO_PATCHLING_APP is "true". Set it only once
+      # https://patchling.app/py/ is live (255BITS/patchling PR #13 merged and
+      # its Pages build settings applied). Unset it to serve the docs here again.
+      - name: Replace pages with redirects to patchling.app/py/
+        if: vars.GPTDIFF_REDIRECT_TO_PATCHLING_APP == 'true'
+        run: python scripts/gptdiff_redirect_stubs.py public https://patchling.app/py/
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
