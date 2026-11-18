@@ -252,3 +252,14 @@ mkdocs serve
 - [AI Agent Toolbox](https://github.com/255BITS/ai-agent-toolbox) — powers Patchling's tool-call parsing across models
 
 MIT licensed. Built by [255labs](https://255labs.xyz).
+
+## Publishing to PyPI
+
+A merge to `main` publishes the tested wheel and source distribution when
+`patchling.__version__` declares a version that is absent from PyPI. Use a
+release PR to bump the version and update the changelog. The workflow publishes
+`patchling`. The deprecated `gptdiff` distribution has no automatic uploads.
+
+Configure PyPI Trusted Publishing for [patchling](https://pypi.org/manage/project/patchling/settings/publishing/)
+with owner `255BITS`, repository `patchling-py`, workflow `publish.yml`, and
+environment `pypi`. The GitHub environment allows publishes from `main`.
