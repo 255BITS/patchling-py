@@ -1,0 +1,121 @@
+name: Publish to PyPI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build and test distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.registry.outputs.version }}
+      publish: ${{ steps.registry.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build, check and test distributions
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+          wheels=(dist/*.whl)
+          python -m pip install "${wheels[0]}[test]"
+          LIVE_LLM=0 GPTDIFF_LLM_API_KEY=dummy-key python -m pytest -q tests/
+      - name: Check the exact version on PyPI
+        id: registry
+        if: github.repository == '255BITS/patchling-py' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          version="$(python -c 'from importlib.metadata import version; print(version("patchling"))')"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          status="$(curl --silent --show-error --retry 2 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://pypi.org/pypi/patchling/$version/json")"
+          case "$status" in
+            200) echo "patchling $version already exists on PyPI" ;;
+            404) echo 'publish=true' >> "$GITHUB_OUTPUT" ;;
+            *) echo "PyPI version lookup returned HTTP $status" >&2; exit 1 ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        if: steps.registry.outputs.publish == 'true'
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish tested distributions
+    if: needs.package.outputs.publish == 'true'
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: pypi-${{ needs.package.outputs.version }}
+      cancel-in-progress: false
+    environment:
+      name: pypi
+      url: https://pypi.org/project/patchling/${{ needs.package.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+      - name: Verify the tested distributions on PyPI
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import time
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import urlopen
+
+          version = os.environ['VERSION']
+          expected = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                      for path in Path('dist').iterdir() if path.is_file()}
+          if not expected:
+              raise SystemExit('The tested distribution directory is empty')
+          url = f'https://pypi.org/pypi/patchling/{quote(version, safe="")}/json'
+          missing = expected.keys()
+          for wait in (0, 2, 2, 2, 2):
+              time.sleep(wait)
+              try:
+                  with urlopen(url, timeout=10) as response:
+                      release = json.load(response)
+              except HTTPError as error:
+                  if error.code == 404:
+                      continue
+                  raise
+              if (release['info']['name'], release['info']['version']) != ('patchling', version):
+                  raise SystemExit('PyPI returned a different project or version')
+              public = {file['filename']: file['digests']['sha256'] for file in release['urls']}
+              mismatched = [name for name in expected.keys() & public.keys() if expected[name] != public[name]]
+              if mismatched:
+                  raise SystemExit('PyPI has different bytes for ' + ', '.join(sorted(mismatched)))
+              missing = expected.keys() - public.keys()
+              if not missing:
+                  print(f'Verified {len(expected)} tested Patchling {version} distributions on PyPI')
+                  break
+          else:
+              raise SystemExit('PyPI did not list the tested distributions ' + ', '.join(sorted(missing)))
+          PY
