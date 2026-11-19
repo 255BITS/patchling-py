@@ -7,16 +7,18 @@
 
 ## Install via pip
 
-To install `patchling` from PyPI, run the following command:
+Install the latest published version from PyPI:
 
 ```bash
-pip install patchling
-pip install tiktoken  # For token counting
+python -m pip install patchling
 ```
 
-## Development Installation (if no pip package is available yet)
+The [PyPI release history](https://pypi.org/project/patchling/#history) lists
+which versions `pip` can install by version number.
 
-If the `patchling` package is not yet available on PyPI, you can install it from the source code:
+## Install from source
+
+Use an editable checkout to develop Patchling or try changes ahead of PyPI:
 
 ```bash
 git clone https://github.com/255BITS/patchling-py.git
@@ -24,7 +26,8 @@ cd patchling-py
 python -m pip install -e '.[test]'
 ```
 
-Package metadata lives in `pyproject.toml`. The version is read from `patchling.__version__` (currently 0.8.1). `setup.py` is only a shim for older install commands.
+Package metadata lives in `pyproject.toml`. The version is read from
+`patchling.__version__`. `setup.py` supports older install commands.
 
 ## Configuration
 

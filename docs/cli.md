@@ -82,7 +82,7 @@ patchling "Update config system" config/ utils/config_loader.py
 `--nowarn`: Disable the warning and confirmation prompt for large token usage
 `--verbose`: Enable verbose output for detailed information during execution
 
-With `--apply`, a failed file application or an empty/invalid generated diff
+Starting in 0.9.5, with `--apply`, a failed file application or an empty/invalid generated diff
 produces exit status `1`; successful application produces `0`. Files are
 processed independently, so successful changes may remain after another file
 fails. The summary lists the failed paths and reasons. Inspect those changes
