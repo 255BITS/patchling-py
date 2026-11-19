@@ -29,7 +29,7 @@ patchling-apply path/to/diff.patch
 ## Options
 
 - **--project-dir**: Specify the target directory for applying the diff (default: current directory)
-- **--model**: (Optional) Specify the model used to apply the diff. This overrides `GPTDIFF_SMARTAPPLY_MODEL`; when neither is set, the default is `openai/gpt-4.1-mini`.
+- **--model**: (Optional) Starting in 0.9.5, selects the model used to apply the diff. This overrides `GPTDIFF_SMARTAPPLY_MODEL`. The default is `openai/gpt-4.1-mini`.
 - **--max_tokens**: (Optional) Maximum tokens to use for LLM responses
 - **--nobeep**: Disable the completion beep notification
 - **--dumb**: Attempt to apply the diff using standard patch logic (like git apply) before falling back to smart apply
@@ -40,7 +40,7 @@ By default, patchling-apply uses an AI-powered smart apply mechanism to apply th
 
 ## Exit status and recovery
 
-The command exits with status `0` when every file succeeds. Deleting a file
+Starting in 0.9.5, the command exits with status `0` when every file succeeds. Deleting a file
 that is already absent is a successful no-op. An empty or invalid diff, an
 unsafe path, a model refusal or empty response, and a filesystem failure
 produce status `1`.

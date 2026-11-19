@@ -1,6 +1,9 @@
 name: Deploy Documentation
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -13,25 +16,27 @@ on:
 # Queue deploys instead of overlapping them, and retry once if Pages is still
 # finishing the previous deployment after this workflow starts.
 concurrency:
-  group: pages
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.pull_request.number) || 'pages' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
-  deploy:
+  build:
+    name: Build documentation
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Pages
+        if: github.repository == '255BITS/patchling-py' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/configure-pages@v6
 
       - name: Set up Python
@@ -45,14 +50,28 @@ jobs:
       - name: Build site
         run: mkdocs build --strict --site-dir public
 
-      - name: Ensure CNAME is set
-        run: echo "gptdiff.255labs.xyz" > public/CNAME
+      - name: Record the site domain and source revision
+        run: |
+          printf '%s\n' 'gptdiff.255labs.xyz' > public/CNAME
+          printf '{"revision":"%s"}\n' "$(git rev-parse HEAD)" > public/pages-revision.json
 
       - name: Upload artifact
+        if: github.repository == '255BITS/patchling-py' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
         with:
           path: public
 
+  deploy:
+    if: github.repository == '255BITS/patchling-py' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
@@ -66,3 +85,18 @@ jobs:
         id: deployment_retry
         if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
+
+      - name: Verify the public documentation revision
+        shell: bash
+        run: |
+          url="https://gptdiff.255labs.xyz/pages-revision.json"
+          for attempt in {1..12}; do
+            if revision=$(curl --silent --show-error --fail --location --max-time 10 \
+              "$url?revision=$GITHUB_SHA&attempt=$attempt" | jq -er '.revision') && [[ "$revision" == "$GITHUB_SHA" ]]; then
+              printf 'Public documentation serves %s\n' "$revision"
+              exit 0
+            fi
+            sleep 5
+          done
+          printf 'Public documentation did not confirm revision %s\n' "$GITHUB_SHA" >&2
+          exit 1
