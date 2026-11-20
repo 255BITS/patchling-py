@@ -570,9 +570,11 @@ def _body_op(pline):
     if pline.startswith("\\"):
         # "\ No newline at end of file" — not a content line.
         return ("skip", None)
-    if pline.lstrip().startswith("```"):
-        # A closing fence left on an LLM diff. Not part of the file.
-        return ("skip", None)
+    # Fence lines (``` / ```bash) are *content* when they carry a diff
+    # prefix: markdown files contain them, and dropping them desyncs the
+    # hunk's context block from the file (P1). A stray wrapping fence is
+    # removed earlier, by extract_diff_blocks in parse_diff_per_file;
+    # a bare fence line here classifies as context, as in the JS sibling.
     # "++foo" is ambiguous: a doubled addition marker, or a real line that
     # starts with '+'. Either reading can corrupt the file, so refuse.
     if pline.startswith("++") and not pline.startswith("+++"):
@@ -625,8 +627,8 @@ def _parse_hunks_detailed(patch, strict_headers):
         while i < len(lines) and not lines[i].lstrip().startswith("@@"):
             kind, text = _body_op(lines[i])
             if kind == "skip":
-                # A "\ No newline" marker annotates the previous body line;
-                # other skipped lines (stray fences) annotate nothing.
+                # The only skipped lines are "\ No newline" markers; one
+                # annotates the previous body line.
                 if lines[i].startswith("\\") and ops:
                     ops[-1][2] = True
                 i += 1

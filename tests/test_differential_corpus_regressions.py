@@ -80,3 +80,17 @@ def test_p4_double_plus_body_line_keeps_real_path(diff, expected_path):
     original = originals.get(expected_path, "")
     assert apply_patch_to_content(original, patches[0][1]) is None
 
+
+
+def test_p1_append_after_fenced_block_applies():
+    # P1: _body_op used to skip every line starting with ``` — including
+    # *content* lines of a markdown file (the context lines ' ```bash'
+    # and ' ```'). Dropping them desynced the hunk's context block from
+    # the file, so a pure append at EOF fell back to the LLM where JS
+    # applies deterministically.
+    original = '# Widget Toolkit\n\nA small library for building widgets.\n\n## Installation\n\n```bash\nnpm install widget-toolkit\n```\n'
+    diff = '--- a/README.md\n+++ b/README.md\n@@ -5,3 +5,9 @@\n ## Installation\n \n ```bash\n npm install widget-toolkit\n ```\n+\n+## License\n+\n+MIT\n+\n+Copyright (c) 2026 255 Bits LLC\n'
+    expected = '# Widget Toolkit\n\nA small library for building widgets.\n\n## Installation\n\n```bash\nnpm install widget-toolkit\n```\n\n## License\n\nMIT\n\nCopyright (c) 2026 255 Bits LLC\n'
+    path, applied = _apply_single(original, diff)
+    assert path == 'README.md'
+    assert applied == expected
