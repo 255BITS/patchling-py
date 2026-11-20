@@ -57,3 +57,26 @@ def test_p5_double_minus_body_line_falls_back():
     assert [p for p, _ in patches] == ['src/config.js']
     assert "--  debug: true," in patches[0][1]
     assert apply_patch_to_content(original, patches[0][1]) is None
+
+
+import pytest
+
+@pytest.mark.parametrize("diff,expected_path", [
+    ('--- a/src/logger.js\n+++ b/src/logger.js\n@@ -1,3 +1,4 @@\n function log(msg) {\n   console.log(msg);\n++  console.error(msg);\n }\n', 'src/logger.js'),
+    ("--- a/src/api.js\n+++ b/src/api.js\n@@ -1,4 +1,6 @@\n async function fetchData(url) {\n   const res = await fetch(url);\n++  if (!res.ok) throw new Error('request failed');\n++  return res.json();\n-  return res.json();\n }\n", 'src/api.js'),
+    ('--- a/src/cart.js\n+++ b/src/cart.js\n@@ -1,6 +1,7 @@\n function total(items) {\n   let sum = 0;\n   for (const item of items) {\n++    sum += item.price * item.qty;\n-    sum += item.price;\n   }\n   return sum;\n }\n', 'src/cart.js'),
+])
+def test_p4_double_plus_body_line_keeps_real_path(diff, expected_path):
+    # P4: a `++` body line (doubled addition marker) was treated as a
+    # to-header, re-keying the patch by the body text itself
+    # ('console.error(msg);' became a "file path"). The patch must stay
+    # keyed by the real path, and the applier must refuse the ambiguous
+    # body line (None -> LLM fallback), exactly as JS does.
+    patches = parse_diff_per_file(diff)
+    assert [p for p, _ in patches] == [expected_path]
+    originals = {
+        "src/logger.js": "function log(msg) {\n  console.log(msg);\n}\n",
+    }
+    original = originals.get(expected_path, "")
+    assert apply_patch_to_content(original, patches[0][1]) is None
+
