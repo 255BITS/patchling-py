@@ -29,3 +29,31 @@ def test_p3_no_trailing_newline_delete_does_not_duplicate_last_line():
     path, applied = _apply_single(original, diff)
     assert path == 'const.go'
     assert applied == expected
+
+
+def test_p2_markdown_list_deletion_keeps_whole_patch():
+    # P2 (silent truncation): the deletion of a markdown list item is the
+    # body line `-- [ ] Write applier`, which the old parser mistook for a
+    # file header and truncated the patch at that line. The deterministic
+    # applier then returned the (nearly) original file as if the edit had
+    # applied. The patch must stay whole and the edit must land exactly.
+    original = '# TODO\n\n- [x] Write parser\n- [ ] Write applier'
+    diff = '--- a/TODO.md\n+++ b/TODO.md\n@@ -1,4 +1,6 @@\n # TODO\n \n - [x] Write parser\n-- [ ] Write applier\n+- [x] Write applier\n+- [ ] Write tests\n+- [ ] Publish to npm\n'
+    expected = '# TODO\n\n- [x] Write parser\n- [x] Write applier\n- [ ] Write tests\n- [ ] Publish to npm\n'
+    patches = parse_diff_per_file(diff)
+    assert [p for p, _ in patches] == ['TODO.md']
+    assert "- [ ] Write applier" in patches[0][1]
+    assert apply_patch_to_content(original, patches[0][1]) == expected
+
+
+def test_p5_double_minus_body_line_falls_back():
+    # P5: a `--` body line is a deletion of a line whose content starts
+    # with `-`; the file has no such line, so the deterministic applier
+    # must refuse (None -> LLM fallback), not return a wrong apply. The
+    # old parser split the patch at that line and applied the head alone.
+    original = 'const config = {\n  debug: true,\n  retries: 3,\n  timeout: 5000,\n};\n\nexport default config;\n'
+    diff = '--- a/src/config.js\n+++ b/src/config.js\n@@ -1,5 +1,4 @@\n const config = {\n--  debug: true,\n   retries: 3,\n   timeout: 5000,\n };\n'
+    patches = parse_diff_per_file(diff)
+    assert [p for p, _ in patches] == ['src/config.js']
+    assert "--  debug: true," in patches[0][1]
+    assert apply_patch_to_content(original, patches[0][1]) is None

@@ -350,7 +350,16 @@ def parse_diff_per_file(diff_text: str) -> list[tuple[str, str]]:
 
     # Check if any header line exists.
     if not any(header_re.match(line) for line in lines):
-        # Fallback strategy: detect file headers starting with '---' / '+++' pairs
+        # Fallback strategy: detect file headers from '---' / '+++' pairs.
+        # File headers tolerate 2-3 markers because LLMs emit malformed
+        # `--`/`++` headers. To avoid misreading a hunk body line that
+        # deletes/adds content starting with `-`/`+` (e.g. a markdown list
+        # item `- [ ] ...` appears as `-- [ ] ...` in the diff) as a new
+        # file header, a `---`/`--` line only counts as a from-header when
+        # the *next* line is a `+++`/`++` to-header — unified diffs always
+        # pair them. A real deletion body line is followed by an ordinary
+        # `+`/context line instead, so it stays in the patch body. (Mirrors
+        # parseDiffPerFile in the JS sibling; P2/P5.)
         diffs = []
         current_lines = []
         current_file = None
@@ -359,36 +368,41 @@ def parse_diff_per_file(diff_text: str) -> list[tuple[str, str]]:
         header_from_re = re.compile(r'^-{2,3}\s+(.*)$')
         header_to_re = re.compile(r'^\+{2,3}\s+(.*)$')
 
-        for line in lines:
-            from_match = header_from_re.match(line)
-            to_match = header_to_re.match(line)
+        def strip_prefix(p):
+            return p[2:] if (p.startswith("a/") or p.startswith("b/")) else p
 
-            if from_match:
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            from_match = header_from_re.match(line)
+            next_line = lines[i + 1] if i + 1 < len(lines) else None
+            next_to = header_to_re.match(next_line) if next_line is not None else None
+
+            if from_match and next_to:
                 if current_file is not None and current_lines:
                     if deletion_mode and not any(l.startswith("+++ /dev/null") for l in current_lines):
                         current_lines.append("+++ /dev/null")
                     diffs.append((current_file, "\n".join(current_lines)))
-                current_lines = [line]
+                # Start the new file and consume the paired to-header in
+                # one step.
+                current_lines = [line, next_line]
                 deletion_mode = False
                 current_file = None
                 from_header = from_match.group(1).strip()
-                continue
-
-            if to_match and current_lines:
-                current_lines.append(line)
-                file_to = to_match.group(1).strip()
-
+                file_to = next_to.group(1).strip()
                 if file_to == "/dev/null":
                     deletion_mode = True
                     if from_header and from_header != "/dev/null":
-                        current_file = from_header[2:] if (from_header.startswith("a/") or from_header.startswith("b/")) else from_header
+                        current_file = strip_prefix(from_header)
                 else:
-                    current_file = file_to[2:] if (file_to.startswith("a/") or file_to.startswith("b/")) else file_to
+                    current_file = strip_prefix(file_to)
+                i += 2  # skip the to-header line we just consumed
                 continue
 
             current_lines.append(line)
             if "deleted file mode" in line:
                 deletion_mode = True
+            i += 1
 
         if current_file is not None and current_lines:
             if deletion_mode and not any(l.startswith("+++ ") for l in current_lines):
