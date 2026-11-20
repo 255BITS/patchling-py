@@ -97,9 +97,12 @@ new file mode 100644
     with patch('patchling.core.call_llm_for_apply', return_value="def new_func():\n    print('New function')"):
 
         updated_files = smartapply(diff_text, original_files)
-        
+
         assert "new.py" in updated_files
-        assert updated_files["new.py"] == "def new_func():\n    print('New function')"
+        # A clean creation applies via the deterministic fast path, whose
+        # output ends with a trailing newline — byte-parity with the JS
+        # sibling's test_smartapply_new_file_creation (255BITS/patchling).
+        assert updated_files["new.py"] == "def new_func():\n    print('New function')\n"
 
 
 def test_smartapply_modify_nonexistent_file():
@@ -261,7 +264,10 @@ diff --git a/game.js b/game.js
 +};
 """
     original_files = {}
-    expected_content = "let player = {\n    class: \"Warrior\",\n};"
+    # The deterministic fast path applies this creation (the malformed
+    # '++++' header still parses) and its output ends with a trailing
+    # newline, matching the JS sibling's deterministic creation output.
+    expected_content = "let player = {\n    class: \"Warrior\",\n};\n"
     def mock_call_llm(file_path, original_content, file_diff, model, api_key, base_url, extra_prompt=None, max_tokens=None):
         return expected_content
     monkeypatch.setattr('patchling.core.call_llm_for_apply', mock_call_llm)

@@ -572,12 +572,15 @@ def _body_op(pline):
     return ("context", pline)
 
 
-def _parse_hunks(patch, strict_headers):
-    """Parse hunks from a single-file patch.
+def _parse_hunks_detailed(patch, strict_headers):
+    """Parse hunks, keeping `\\ No newline` markers and `@@` new-line counts.
 
-    Returns a list of (hint, ops), None when the patch cannot be applied by
-    this parser, or `_AMBIGUOUS` for a doubled '+' line. Callers must not
-    guess at ambiguous lines.
+    Returns a list of (hint, ops, new_count) where each op is a
+    (kind, text, no_newline) triple — no_newline records that a
+    `\\ No newline at end of file` marker annotated the op — and new_count
+    is the hunk header's declared `+` line count (None when the header
+    carries no usable numbers). Returns None when the patch cannot be
+    parsed, or `_AMBIGUOUS` for a doubled '+' line.
     """
     lines = patch.splitlines()
     hunks = []
@@ -588,6 +591,7 @@ def _parse_hunks(patch, strict_headers):
             i += 1
             continue
         header = line.strip()
+        new_count = None
         if header == "@@":
             hint = 0
         else:
@@ -595,6 +599,8 @@ def _parse_hunks(patch, strict_headers):
             if match:
                 orig = int(match.group(1)) if match.group(1) else 1
                 hint = max(orig - 1, 0)
+                if match.group(3) is not None:
+                    new_count = int(match.group(4)) if match.group(4) else 1
             elif strict_headers:
                 return None
             else:
@@ -604,17 +610,38 @@ def _parse_hunks(patch, strict_headers):
         i += 1
         while i < len(lines) and not lines[i].lstrip().startswith("@@"):
             kind, text = _body_op(lines[i])
-            i += 1
             if kind == "skip":
+                # A "\ No newline" marker annotates the previous body line;
+                # other skipped lines (stray fences) annotate nothing.
+                if lines[i].startswith("\\") and ops:
+                    ops[-1][2] = True
+                i += 1
                 continue
             if kind == "ambiguous":
                 return _AMBIGUOUS
-            ops.append((kind, text))
+            ops.append([kind, text, False])
+            i += 1
         if ops:
-            hunks.append((hint, ops))
+            hunks.append((hint, ops, new_count))
     if not hunks:
         return None
     return hunks
+
+
+def _parse_hunks(patch, strict_headers):
+    """Parse hunks from a single-file patch.
+
+    Returns a list of (hint, ops), None when the patch cannot be applied by
+    this parser, or `_AMBIGUOUS` for a doubled '+' line. Callers must not
+    guess at ambiguous lines.
+    """
+    detailed = _parse_hunks_detailed(patch, strict_headers)
+    if detailed is None or detailed is _AMBIGUOUS:
+        return detailed
+    return [
+        (hint, [(kind, text) for kind, text, _no_newline in ops])
+        for hint, ops, _new_count in detailed
+    ]
 
 
 def _assemble(original, lines):
@@ -653,32 +680,78 @@ def apply_patch_to_content(original_content: str | None, patch: str) -> str | No
     """
     if original_content is None:
         original_content = ""
-    parsed = _parse_hunks(patch, strict_headers=True)
+    parsed = _parse_hunks_detailed(patch, strict_headers=True)
     if not parsed or parsed is _AMBIGUOUS:
         return None
 
     lines = original_content.splitlines()
+    # Whether the assembled output ends without a trailing newline is a
+    # property of the last line emitted, mirroring applyPatchToFile in the
+    # JS sibling: true when that line carries a "\ No newline" marker, or
+    # when it is the original's own last line carried over verbatim and the
+    # original itself had no trailing newline.
+    original_no_trailing = bool(original_content) and not original_content.endswith(("\n", "\r"))
     new_lines = []
+    ends_without_newline = False
+
+    def push_original(k):
+        nonlocal ends_without_newline
+        new_lines.append(lines[k])
+        ends_without_newline = k == len(lines) - 1 and original_no_trailing
+
     cursor = 0
-    for hint, ops in parsed:
-        block = [text for kind, text in ops if kind != "add"]
+    for hint, ops, new_count in parsed:
+        # Git's "last line loses its trailing newline" pattern is canonically
+        # a del/add pair with identical text plus "\ No newline" markers.
+        # Sloppy diffs write the old copy as *context* instead, leaving a
+        # trailing `+<line>` that duplicates the last context line. When the
+        # final op is such a no-newline add restating the last context line
+        # across only deletions, and the @@ header's new-line count confirms
+        # the collapsed reading (one line fewer than the literal reading),
+        # drop the redundant add — it only re-states the kept line's newline
+        # status. (Mirrors the same rule in the JS sibling; P3.)
+        if new_count is not None and ops:
+            last = ops[-1]
+            if last[0] == "add" and last[2]:
+                ctx_idx = -1
+                j = len(ops) - 2
+                while j >= 0:
+                    if ops[j][0] == "context":
+                        ctx_idx = j
+                        break
+                    if ops[j][0] != "del":
+                        break
+                    j -= 1
+                if ctx_idx != -1 and ctx_idx < len(ops) - 2 and ops[ctx_idx][1] == last[1]:
+                    literal_new_count = sum(1 for kind, _text, _nl in ops if kind != "del")
+                    if new_count == literal_new_count - 1:
+                        ops.pop()
+        block = [text for kind, text, _nl in ops if kind != "add"]
         pos = _find_block(lines, block, cursor, hint)
         if pos is None:
             return None
-        new_lines.extend(lines[cursor:pos])
+        for k in range(cursor, pos):
+            push_original(k)
         idx = pos
-        for kind, text in ops:
+        for kind, text, no_newline in ops:
             if kind == "add":
                 new_lines.append(text)
+                ends_without_newline = bool(no_newline)
                 continue
             if idx >= len(lines) or lines[idx] != text:
                 return None
             if kind == "context":
-                new_lines.append(lines[idx])
+                push_original(idx)
+                if no_newline:
+                    ends_without_newline = True
             idx += 1
         cursor = idx
-    new_lines.extend(lines[cursor:])
-    return _assemble(original_content, new_lines)
+    for k in range(cursor, len(lines)):
+        push_original(k)
+    content = "\n".join(new_lines)
+    if content and not ends_without_newline:
+        content += "\n"
+    return content
 
 
 _MAX_DEL_CANDIDATES = 32
